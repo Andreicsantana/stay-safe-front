@@ -54,7 +54,18 @@ export default function App() {
     if (profile.role === "dependent") {
       storage.set("staysafe_session", session);
     }
-    setAppState({ screen: "app", ...session });
+    setAppState(prev => ({
+      ...prev,
+      screen: "app",
+      ...session,
+    }));
+  }
+
+  function handleBackToProfiles() {
+    setAppState(prev => ({
+      ...prev,
+      screen: "select_profile",
+    }));
   }
 
   function handleLogout() {
@@ -115,6 +126,7 @@ export default function App() {
       session={{ token: appState.token, profile: appState.profile }}
       dependents={appState.dependents}
       onLogout={handleLogout}
+      onBackToProfiles={handleBackToProfiles}
     />
   );
 }

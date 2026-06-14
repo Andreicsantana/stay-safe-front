@@ -55,12 +55,12 @@ export default function DependentScreen({ session, onLogout }) {
   }, [token, onLogout]);
 
   useEffect(() => {
-    if (!activeAlert || ["resolved_carer", "resolved_dependent", "escalated"].includes(activeAlert.status)) {
+    if (!activeAlert || ["acknowledged", "resolved_carer", "resolved_dependent", "escalated"].includes(activeAlert.status)) {
       clearInterval(timerRef.current);
       return;
     }
     const emitted = new Date(activeAlert.emitted_at || Date.now()).getTime();
-    const escalateAt = emitted + 120000;
+    const escalateAt = emitted + 30000;
     const tick = () => {
       const left = Math.max(0, Math.ceil((escalateAt - Date.now()) / 1000));
       setTimeLeft(left);
@@ -152,17 +152,40 @@ export default function DependentScreen({ session, onLogout }) {
         <div style={{
           margin: "20px",
           padding: "16px",
-          background: escalated ? G.redLight : G.blueLight,
+          background: escalated 
+            ? G.redLight 
+            : activeAlert?.status === "acknowledged" 
+              ? G.greenLight 
+              : G.blueLight,
           borderRadius: "16px",
-          border: `1.5px solid ${escalated ? G.red : G.blue}`,
+          border: `1.5px solid ${
+            escalated 
+              ? G.red 
+              : activeAlert?.status === "acknowledged" 
+                ? G.green 
+                : G.blue
+          }`,
         }}>
-          <p style={{ margin: 0, fontWeight: 700, fontSize: "15px", color: escalated ? G.redDark : G.blue }}>
-            {escalated ? "🚨 Autoridades chamadas" : "🔔 Alerta ativo"}
+          <p style={{ 
+            margin: 0, 
+            fontWeight: 700, 
+            fontSize: "15px", 
+            color: escalated 
+              ? G.redDark 
+              : activeAlert?.status === "acknowledged" 
+                ? G.green 
+                : G.blue 
+          }}>
+            {escalated 
+              ? "🚨 Autoridades chamadas" 
+              : activeAlert?.status === "acknowledged"
+                ? "🏃 Cuidador a Caminho!"
+                : "🔔 Alerta ativo"}
           </p>
           <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray600 }}>
             {statusLabel[activeAlert?.status] || "Processando..."}
           </p>
-          {timeLeft !== null && timeLeft > 0 && !escalated && (
+          {timeLeft !== null && timeLeft > 0 && !escalated && activeAlert?.status !== "acknowledged" && (
             <p style={{ margin: "8px 0 0", fontSize: "13px", color: G.blue, fontWeight: 600 }}>
               ⏱ Autoridades em {timeLeft}s se não atendido
             </p>

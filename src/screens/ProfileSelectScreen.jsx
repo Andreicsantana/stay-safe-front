@@ -3,6 +3,7 @@ import { api } from "../services/api";
 import { G } from "../constants/colors";
 import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
+import ConfirmModal from "../components/ConfirmModal";
 
 const WEB_DEMO_TOKEN = `web-demo-${Math.random().toString(36).slice(2)}`;
 
@@ -18,6 +19,7 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
   const [editConfirmPin, setEditConfirmPin] = useState("");
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState("");
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const handleSelect = async (profile) => {
     setLoading(profile.id);
@@ -55,6 +57,7 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
   const closeModal = () => {
     setModal(null);
     setModalError("");
+    setConfirmLogout(false);
   };
 
   const handleEdit = async () => {
@@ -91,8 +94,8 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
     }
   };
 
-  const handleForceLogout = async () => {
-    if (!confirm("Isso desconectará o dependente de todos os dispositivos. Continuar?")) return;
+  const handleConfirmForceLogout = async () => {
+    setConfirmLogout(false);
     setModalLoading(true);
     setModalError("");
     try {
@@ -341,7 +344,7 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
                       <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: 600, color: G.redDark }}>Desconectar Dispositivo</p>
                       <p style={{ margin: "0 0 12px", fontSize: "12px", color: G.redDark }}>Força a saída do dependente em todos os celulares conectados.</p>
                       <button
-                        onClick={handleForceLogout}
+                        onClick={() => setConfirmLogout(true)}
                         disabled={modalLoading}
                         style={{
                           background: G.red, color: G.white, border: "none", borderRadius: "8px",
@@ -401,6 +404,17 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={confirmLogout}
+        title="Desconectar Dependente?"
+        message="Isso desconectará o dependente de todos os dispositivos conectados. Tem certeza que deseja continuar?"
+        confirmText="Sim, desconectar"
+        cancelText="Cancelar"
+        onConfirm={handleConfirmForceLogout}
+        onCancel={() => setConfirmLogout(false)}
+        isDestructive={true}
+      />
     </PhoneFrame>
   );
 }

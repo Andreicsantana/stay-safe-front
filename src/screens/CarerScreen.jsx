@@ -4,18 +4,17 @@ import { G } from "../constants/colors";
 import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
 import StatusBadge from "../components/StatusBadge";
+import ConfirmModal from "../components/ConfirmModal";
 
-export default function CarerScreen({ session, onLogout }) {
+export default function CarerScreen({ session, onLogout, onBackToProfiles }) {
   const { token, profile } = session;
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [history, setHistory] = useState([]);
   const [dependents, setDependents] = useState([]);
   const [view, setView] = useState("home");
   const [notif, setNotif] = useState(null);
-  const [linkModal, setLinkModal] = useState(false);
-  const [linkCode, setLinkCode] = useState("");
-  const [linkLoading, setLinkLoading] = useState(false);
-  const [linkError, setLinkError] = useState("");
+  const [confirmResolveId, setConfirmResolveId] = useState(null);
+  const [confirmLogoutModal, setConfirmLogoutModal] = useState(false);
   const wsRef = useRef(null);
 
   const loadDependents = useCallback(async () => {
@@ -96,33 +95,15 @@ export default function CarerScreen({ session, onLogout }) {
     }
   };
 
-  const resolve = async (alertId) => {
-    if (!confirm("Confirmar encerramento do alerta?")) return;
+  const handleConfirmResolve = async () => {
+    const alertId = confirmResolveId;
+    setConfirmResolveId(null);
+    if (!alertId) return;
     try {
       await api.post(`/alerts/${alertId}/resolve`, { notes: "Resolvido pelo cuidador" }, token);
       loadAlerts();
     } catch (e) {
       alert(e.message);
-    }
-  };
-
-  const handleLinkDependent = async () => {
-    setLinkError("");
-    if (!linkCode.trim()) return setLinkError("Informe o ID do perfil dependente.");
-    setLinkLoading(true);
-    try {
-      await api.post("/profiles/relationships", {
-        carerProfileId: profile.id,
-        dependentProfileId: linkCode.trim(),
-      }, token);
-      setLinkModal(false);
-      setLinkCode("");
-      loadDependents();
-      loadAlerts();
-    } catch (e) {
-      setLinkError(e.message);
-    } finally {
-      setLinkLoading(false);
     }
   };
 
@@ -176,7 +157,12 @@ export default function CarerScreen({ session, onLogout }) {
               {activeAlerts.length} ativo{activeAlerts.length > 1 ? "s" : ""}
             </div>
           )}
-          <button onClick={onLogout} style={{ background: G.gray100, border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: G.gray600, cursor: "pointer" }}>
+          {onBackToProfiles && (
+            <button onClick={onBackToProfiles} style={{ background: G.gray100, border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: G.gray600, cursor: "pointer" }}>
+              Perfis
+            </button>
+          )}
+          <button onClick={() => setConfirmLogoutModal(true)} style={{ background: G.gray100, border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: G.gray600, cursor: "pointer" }}>
             Sair
           </button>
         </div>
@@ -234,7 +220,7 @@ export default function CarerScreen({ session, onLogout }) {
                           ✓ Confirmar
                         </Btn>
                       )}
-                      <Btn onClick={() => resolve(alert.id)} color={G.green} style={{ fontSize: "13px", padding: "10px" }}>
+                      <Btn onClick={() => setConfirmResolveId(alert.id)} color={G.green} style={{ fontSize: "13px", padding: "10px" }}>
                         ✓ Encerrar
                       </Btn>
                     </div>
@@ -310,64 +296,33 @@ export default function CarerScreen({ session, onLogout }) {
                 ))}
               </div>
             )}
-
-            <button onClick={() => { setLinkModal(true); setLinkError(""); setLinkCode(""); }} style={{
-              display: "flex", alignItems: "center", gap: "12px",
-              padding: "14px 16px", background: "transparent",
-              border: `1.5px dashed ${G.blue}`, borderRadius: "16px",
-              cursor: "pointer", width: "100%",
-            }}>
-              <div style={{ width: "40px", height: "40px", borderRadius: "50%", background: G.blueLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", flexShrink: 0 }}>
-                ＋
-              </div>
-              <p style={{ margin: 0, fontWeight: 600, color: G.blue, fontSize: "14px" }}>Vincular dependente</p>
-            </button>
           </>
         )}
       </div>
 
-      {/* ── Modal de vínculo ── */}
-      {linkModal && (
-        <div onClick={() => setLinkModal(false)} style={{
-          position: "absolute", inset: 0, background: "rgba(0,0,0,0.45)",
-          display: "flex", alignItems: "flex-end", borderRadius: "inherit", zIndex: 50,
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            width: "100%", background: G.white,
-            borderRadius: "24px 24px 0 0", padding: "24px 20px 32px",
-          }}>
-            <div style={{ width: "40px", height: "4px", background: G.gray200, borderRadius: "4px", margin: "0 auto 20px" }} />
-            <h3 style={{ margin: "0 0 6px", fontSize: "18px", fontWeight: 700, color: G.gray800 }}>Vincular dependente</h3>
-            <p style={{ margin: "0 0 16px", fontSize: "13px", color: G.gray400 }}>
-              Cole o ID do perfil dependente. Você encontra o ID na tela do dependente, em "Configurações".
-            </p>
-            <label style={{ fontSize: "13px", color: G.gray600, fontWeight: 500, display: "block", marginBottom: "6px" }}>
-              ID do perfil dependente
-            </label>
-            <input
-              type="text"
-              value={linkCode}
-              onChange={e => setLinkCode(e.target.value)}
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              style={{
-                width: "100%", padding: "12px 14px",
-                border: `1.5px solid ${linkError ? G.red : G.gray200}`,
-                borderRadius: "12px", fontSize: "13px",
-                fontFamily: "monospace", outline: "none", boxSizing: "border-box",
-              }}
-            />
-            {linkError && <p style={{ color: G.red, fontSize: "13px", margin: "6px 0 0" }}>{linkError}</p>}
-            <div style={{ marginTop: "20px" }}>
-              <Btn onClick={handleLinkDependent} disabled={linkLoading} color={G.blue}>
-                {linkLoading ? "Vinculando..." : "Vincular"}
-              </Btn>
-              <button onClick={() => setLinkModal(false)} style={{ marginTop: "12px", background: "transparent", border: "none", color: G.gray600, fontSize: "14px", cursor: "pointer", width: "100%", padding: "8px" }}>
-                Cancelar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
+
+      <ConfirmModal
+        isOpen={!!confirmResolveId}
+        title="Encerrar Alerta?"
+        message="Tem certeza que deseja encerrar este alerta de emergência? Esta ação confirmará que o dependente está seguro."
+        confirmText="Sim, encerrar"
+        cancelText="Cancelar"
+        onConfirm={handleConfirmResolve}
+        onCancel={() => setConfirmResolveId(null)}
+        confirmColor={G.green}
+      />
+
+      <ConfirmModal
+        isOpen={confirmLogoutModal}
+        title="Confirmar Saída"
+        message="Tem certeza que deseja sair do aplicativo?"
+        confirmText="Sim, sair"
+        cancelText="Não, continuar"
+        onConfirm={onLogout}
+        onCancel={() => setConfirmLogoutModal(false)}
+        isDestructive={true}
+      />
 
       <style>{`
         @keyframes slideDown {
