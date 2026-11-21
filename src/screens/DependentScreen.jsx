@@ -27,6 +27,7 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
   const [pinError, setPinError] = useState("");
   const [resolving, setResolving] = useState(false);
   const [timeLeft, setTimeLeft] = useState(null);
+  const [hasPin, setHasPin] = useState(Boolean(profile?.hasPin));
 
   const timerRef = useRef(null);
   const countdownRef = useRef(null);
@@ -38,8 +39,14 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
 
   const loadActiveAlert = useCallback(async () => {
     try {
-      const d = await api.get("/alerts/active-for-me", token);
-      setActiveAlert(d.alert || null);
+      const [alertData, profileData] = await Promise.all([
+        api.get("/alerts/active-for-me", token),
+        api.get("/profiles/me", token),
+      ]);
+      setActiveAlert(alertData.alert || null);
+      if (profileData?.profile && typeof profileData.profile.hasPin === "boolean") {
+        setHasPin(profileData.profile.hasPin);
+      }
     } catch (err) {
       if (err.status === 401 && onSessionExpired) {
         onSessionExpired();
@@ -382,12 +389,12 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
               Encerrar alerta
             </Dialog.Title>
             <Dialog.Description className="mt-1 mb-5 text-center text-[18px] text-texto-secundario">
-              {profile?.hasPin === false
+              {!hasPin
                 ? "Confirme se está tudo bem para encerrar."
                 : "Digite o PIN para confirmar."}
             </Dialog.Description>
 
-            {profile?.hasPin === false ? (
+            {!hasPin ? (
               <div className="flex flex-col gap-3">
                 <Btn
                   onClick={() => handleResolve("")}
