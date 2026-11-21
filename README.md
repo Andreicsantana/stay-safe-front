@@ -1,459 +1,63 @@
-# 📱 Front-end — Sistema de Alertas para Dependentes
+# Stay Safe Web
 
-Interface do sistema de monitoramento e alertas de emergência para cuidadores e dependentes.
+Frontend application for **Stay Safe**, an emergency alert system designed for elderly dependents and their family carers. Built as an installable PWA with a high-contrast, accessible interface tailored for low vision, tremors, and low tech familiarity.
 
-O projeto é multiplataforma, composto por:
+## Tech Stack
 
-* Aplicativo mobile desenvolvido com React Native e Expo;
-* Interface web desenvolvida com React e Vite;
-* Integração com a mesma API REST responsável pela autenticação, gerenciamento de perfis e emissão de alertas.
+- **Framework**: React 19 + Vite 8
+- **Styling**: Tailwind CSS v4 (fixed high-contrast light theme via `@theme`)
+- **UI Primitives**: Radix UI (`@radix-ui/react-dialog`, `@radix-ui/react-tabs`)
+- **Icons**: Phosphor Icons (`@phosphor-icons/react`)
+- **Typography**: `@fontsource/atkinson-hyperlegible-next` & `@fontsource-variable/fraunces` (self-hosted)
+- **PWA**: `vite-plugin-pwa` (installable standalone app, app shell caching)
+- **Testing & Lint**: Vitest, React Testing Library, ESLint
 
----
+## Key Features
 
-## 📐 Arquitetura Geral
+### Elderly Dependent Experience
+- **Single-action screen**: Large `AJUDA` button (~60% viewport height), no clutter, no logout button, no technical IDs.
+- **Accidental tap protection**: 3-second countdown (`Enviando em 3… 2… 1…`) with a large cancel strip (`72px+` touch target) — no hold-to-trigger required.
+- **Full-screen alert states**: Distinct high-contrast colors, `96px` icons, and short messages for waiting (`amber`), carer on the way (`pine green`), and escalated (`red`).
+- **On-screen PinPad**: Custom `72px` numeric keypad that avoids triggering the system keyboard.
+- **Multisensory feedback**: Vibration (`navigator.vibrate`), Web Audio API tones, and `pt-BR` speech synthesis (`speechSynthesis`).
+- **Resilience**: Persistent `localStorage` session, automatic WebSocket reconnection with backoff, offline connection banner, and Screen Wake Lock during active alerts.
 
-```text
-┌─────────────────────────────┐
-│     Aplicativo Mobile       │
-│   React Native + Expo       │
-└──────────────┬──────────────┘
-               │
-               │ HTTP/HTTPS
-               ▼
-┌─────────────────────────────┐
-│          API REST           │
-│      Node.js + Express      │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│   PostgreSQL (Supabase)     │
-└─────────────────────────────┘
+### Carer Experience
+- **Bottom navigation**: `Alertas` (with active count badge), `Histórico`, and `Dependentes`.
+- **Real-time alerts**: Persistent top alert banner, live elapsed timer, address and Google Maps link, `"Estou indo"` and `"Encerrar"` actions.
+- **Dependent management**: Edit name/PIN, copy profile UUID, remote device disconnect (`force-logout`), and PWA install instructions.
 
-┌─────────────────────────────┐
-│      Interface Web          │
-│        React + Vite         │
-└──────────────┬──────────────┘
-               │
-               └──────► API REST
-```
+## Getting Started
 
----
-
-## ✨ Funcionalidades
-
-* Autenticação de usuários
-* Controle de sessão via JWT
-* Emissão de alertas de emergência
-* Captura de localização GPS
-* Consulta de histórico de alertas
-* Reconhecimento e resolução de alertas
-* Interface específica para cuidadores e dependentes
-* Consumo centralizado da API
-
----
-
-## 🛠️ Tecnologias
-
-### React
-
-Biblioteca utilizada para construção da interface web.
-
-```jsx
-// components/AlertCard.jsx
-import { useState } from 'react';
-
-export function AlertCard({ alert }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="alert-card">
-      <h3>{alert.address || 'Localização desconhecida'}</h3>
-
-      <span className={`badge badge--${alert.status}`}>
-        {alert.status}
-      </span>
-
-      <button onClick={() => setExpanded(!expanded)}>
-        {expanded ? 'Menos detalhes' : 'Ver detalhes'}
-      </button>
-
-      {expanded && <p>{alert.notes}</p>}
-    </div>
-  );
-}
-```
-
----
-
-### Vite
-
-Ferramenta utilizada para desenvolvimento e build da aplicação web.
+### 1. Install dependencies
 
 ```bash
-# Desenvolvimento
-npm run dev
+npm install
+```
 
-# Build de produção
+### 2. Configure environment variables (optional for local dev)
+
+Create a `.env` file if pointing to a remote API:
+
+```env
+VITE_API_BASE=http://localhost:3001/api
+VITE_WS_URL=ws://localhost:3001/ws
+```
+
+### 3. Run locally
+
+```bash
+npm run dev
+```
+
+### 4. Lint, Test & Build
+
+```bash
+npm run lint
+npm test
 npm run build
-
-# Visualização local do build
-npm run preview
 ```
 
-```js
-// vite.config.js
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+## Deployment
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    proxy: {
-      '/api': 'http://localhost:3000'
-    }
-  }
-});
-```
-
----
-
-### React Router
-
-Gerenciamento de rotas da aplicação web.
-
-```jsx
-// App.jsx
-import {
-  BrowserRouter,
-  Routes,
-  Route,
-  Navigate
-} from 'react-router-dom';
-
-import { Login } from './pages/Login';
-import { Dashboard } from './pages/Dashboard';
-import { AlertDetail } from './pages/AlertDetail';
-import { PrivateRoute } from './components/PrivateRoute';
-
-export function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route
-          path="/login"
-          element={<Login />}
-        />
-
-        <Route element={<PrivateRoute />}>
-          <Route
-            path="/dashboard"
-            element={<Dashboard />}
-          />
-
-          <Route
-            path="/alerts/:id"
-            element={<AlertDetail />}
-          />
-        </Route>
-
-        <Route
-          path="*"
-          element={<Navigate to="/dashboard" />}
-        />
-      </Routes>
-    </BrowserRouter>
-  );
-}
-```
-
-```jsx
-// components/PrivateRoute.jsx
-import { Navigate, Outlet } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
-
-export function PrivateRoute() {
-  const { token } = useAuth();
-
-  return token
-    ? <Outlet />
-    : <Navigate to="/login" />;
-}
-```
-
----
-
-### React Native + Expo
-
-Framework utilizado para desenvolvimento do aplicativo mobile.
-
-```jsx
-// screens/HomeScreen.jsx
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet
-} from 'react-native';
-
-import { useNavigation } from '@react-navigation/native';
-
-export function HomeScreen() {
-  const navigation = useNavigation();
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>
-        Sistema de Alertas
-      </Text>
-
-      <TouchableOpacity
-        style={styles.button}
-        onPress={() =>
-          navigation.navigate('EmitAlert')
-        }
-      >
-        <Text style={styles.buttonText}>
-          🚨 Emitir Alerta
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 24
-  },
-
-  button: {
-    backgroundColor: '#E53E3E',
-    padding: 16,
-    borderRadius: 8
-  },
-
-  buttonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold'
-  }
-});
-```
-
-```bash
-# Expo Go
-npx expo start
-
-# Android
-npx expo run:android
-
-# iOS
-npx expo run:ios
-```
-
----
-
-### Expo Location
-
-Biblioteca utilizada para obtenção da localização GPS do dispositivo.
-
-```jsx
-import * as Location from 'expo-location';
-
-const emitAlert = async () => {
-  const { status } =
-    await Location.requestForegroundPermissionsAsync();
-
-  if (status !== 'granted') {
-    alert('Permissão de localização negada.');
-    return;
-  }
-
-  const location =
-    await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High
-    });
-
-  await fetch('/api/alerts', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude
-    })
-  });
-};
-```
-
----
-
-### Comunicação com a API
-
-Toda comunicação com o back-end é realizada através do `fetch`.
-
-```js
-// lib/api.js
-const BASE_URL =
-  import.meta.env.VITE_API_URL;
-
-export const api = {
-  async get(path, token) {
-    const res = await fetch(
-      `${BASE_URL}${path}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }
-    );
-
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
-
-    return res.json();
-  },
-
-  async post(path, body, token) {
-    const res = await fetch(
-      `${BASE_URL}${path}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token && {
-            Authorization: `Bearer ${token}`
-          })
-        },
-        body: JSON.stringify(body)
-      }
-    );
-
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
-
-    return res.json();
-  }
-};
-```
-
----
-
-## 🔐 Variáveis de Ambiente
-
-### Web
-
-```env
-VITE_API_URL=https://sua-api.onrender.com
-```
-
-### Mobile
-
-```env
-EXPO_PUBLIC_API_URL=https://sua-api.onrender.com
-```
-
----
-
-## 🚀 Como Executar
-
-### Web
-
-```bash
-npm install
-
-cp .env.example .env
-
-npm run dev
-```
-
-A aplicação ficará disponível em:
-
-```text
-http://localhost:5173
-```
-
-### Mobile
-
-```bash
-npm install
-
-cp .env.example .env
-
-npx expo start
-```
-
-Após iniciar o Expo, escaneie o QR Code utilizando o aplicativo Expo Go.
-
----
-
-## ☁️ Deploy
-
-### Vercel (Web)
-
-```text
-Framework Preset: Vite
-Build Command: npm run build
-Output Directory: dist
-```
-
-Características:
-
-* Deploy automático via GitHub
-* Configuração de variáveis de ambiente pelo painel
-* Hospedagem estática da aplicação web
-
----
-
-## 👥 Perfis de Usuário
-
-| Perfil    | Responsabilidades                              |
-| --------- | ---------------------------------------------- |
-| carer     | Receber, reconhecer e resolver alertas         |
-| dependent | Emitir alertas e consultar o próprio histórico |
-
----
-
-## 📁 Estrutura do Projeto
-
-### Web
-
-```text
-front/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   ├── hooks/
-│   ├── lib/
-│   ├── App.jsx
-│   └── main.jsx
-├── .env.example
-├── index.html
-└── vite.config.js
-```
-
-### Mobile
-
-```text
-mobile/
-├── app/
-│   ├── (tabs)/
-│   └── alert/
-├── components/
-├── hooks/
-├── lib/
-├── .env.example
-└── app.json
-```
+Configured for **Netlify** (`netlify.toml`) with SPA fallback routing (`/* -> /index.html`). Set `VITE_API_BASE` and `VITE_WS_URL` in your Netlify environment variables before building.
