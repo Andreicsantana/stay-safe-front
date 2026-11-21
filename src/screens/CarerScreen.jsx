@@ -1,20 +1,89 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import * as Tabs from "@radix-ui/react-tabs";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  BellRinging,
+  Check,
+  CheckCircle,
+  ClockCounterClockwise,
+  Copy,
+  LinkBreak,
+  MapPin,
+  PencilSimple,
+  PersonSimpleRun,
+  SignOut,
+  Siren,
+  UserCircle,
+  Users,
+  WifiHigh,
+  WifiSlash,
+  X,
+} from "@phosphor-icons/react";
 import { api, WS_URL } from "../services/api";
-import { G } from "../constants/colors";
-import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
+import Btn from "../components/Btn";
 import StatusBadge from "../components/StatusBadge";
 import ConfirmModal from "../components/ConfirmModal";
+import ConnectionBanner from "../components/ConnectionBanner";
+import { notifyCarerNewAlert } from "../utils/feedback";
 
-export default function CarerScreen({ session, onLogout, onBackToProfiles }) {
-  const { token, profile } = session;
+function formatElapsed(iso, nowMs) {
+  if (!iso) return "";
+  const diffSec = Math.max(0, Math.floor((nowMs - new Date(iso).getTime()) / 1000));
+  if (diffSec < 60) return `há ${diffSec}s`;
+  const mins = Math.floor(diffSec / 60);
+  const secs = diffSec % 60;
+  if (mins < 60) return `há ${mins}m ${secs}s`;
+  const hrs = Math.floor(mins / 60);
+  return `há ${hrs}h ${mins % 60}m`;
+}
+
+function formatTime(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return "Hoje";
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Ontem";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+}
+
+export default function CarerScreen({
+  session,
+  onLogout,
+  onBackToProfiles,
+  onSessionExpired,
+}) {
+  const { token, profile, user } = session;
+  const userId = user?.id || profile?.user_id;
+
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [history, setHistory] = useState([]);
   const [dependents, setDependents] = useState([]);
-  const [view, setView] = useState("home");
-  const [notif, setNotif] = useState(null);
+  const [activeTab, setActiveTab] = useState("home");
+  const [alertBanners, setAlertBanners] = useState([]);
   const [confirmResolveId, setConfirmResolveId] = useState(null);
   const [confirmLogoutModal, setConfirmLogoutModal] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [wsConnected, setWsConnected] = useState(false);
+
+  const [editModal, setEditModal] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editPin, setEditPin] = useState("");
+  const [editConfirmPin, setEditConfirmPin] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [copiedId, setCopiedId] = useState(false);
+  const [confirmForceLogout, setConfirmForceLogout] = useState(false);
+
   const wsRef = useRef(null);
 
   const loadDependents = useCallback(async () => {
@@ -22,9 +91,9 @@ export default function CarerScreen({ session, onLogout, onBackToProfiles }) {
       const data = await api.get("/profiles/dependents", token);
       setDependents(data.dependents || []);
     } catch (e) {
-      console.error("Erro ao carregar dependentes:", e);
+      if (e.status === 401 && onSessionExpired) onSessionExpired();
     }
-  }, [token]);
+  }, [token, onSessionExpired]);
 
   const loadAlerts = useCallback(async () => {
     try {
@@ -35,63 +104,118 @@ export default function CarerScreen({ session, onLogout, onBackToProfiles }) {
       setActiveAlerts(active.activeAlerts || []);
       setHistory(hist.alerts || []);
     } catch (e) {
-      console.error("Erro ao carregar alertas:", e);
+      if (e.status === 401 && onSessionExpired) onSessionExpired();
     }
-  }, [token]);
+  }, [token, onSessionExpired]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadDependents();
-    loadAlerts();
+    const timer = setTimeout(() => {
+      loadDependents();
+      loadAlerts();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [loadDependents, loadAlerts]);
 
   useEffect(() => {
-    let ws;
-    let reconnectTimer;
+    const ticker = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(ticker);
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    let ws = null;
+    let reconnectTimer = null;
+    let backoffMs = 1000;
+    let unmounted = false;
 
     const connect = () => {
+      if (unmounted) return;
+      clearTimeout(reconnectTimer);
       ws = new WebSocket(`${WS_URL}?token=${token}`);
       wsRef.current = ws;
+
+      ws.onopen = () => {
+        backoffMs = 1000;
+        setWsConnected(true);
+        loadAlerts();
+      };
 
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
+          if (msg.type === "ALERT_STATE") {
+            setActiveAlerts(msg.activeAlerts || []);
+          }
           if (msg.type === "NEW_ALERT") {
-            setNotif({ ...msg, id: Date.now() });
-            setTimeout(() => setNotif(null), 8000);
+            setAlertBanners((prev) => [...prev, { ...msg, bannerId: `${Date.now()}-${Math.random()}` }]);
+            notifyCarerNewAlert();
             loadAlerts();
           }
           if (["ALERT_RESOLVED", "ALERT_ESCALATED", "ALERT_ACKNOWLEDGED"].includes(msg.type)) {
             loadAlerts();
           }
-        } catch (err) {
-          console.error("Erro ao processar mensagem WebSocket:", err);
+        } catch {
+          // ignore malformed ws message
         }
       };
 
-      ws.onclose = () => {
-        // Tentar reconectar em 3 segundos
-        reconnectTimer = setTimeout(connect, 3000);
+      ws.onclose = (event) => {
+        setWsConnected(false);
+        if (unmounted) return;
+        if (event.code === 4002 && onSessionExpired) {
+          onSessionExpired();
+          return;
+        }
+        reconnectTimer = setTimeout(connect, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, 5000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
       };
     };
 
+    const handleReconnectTrigger = () => {
+      if (document.visibilityState === "hidden") return;
+      if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+        backoffMs = 1000;
+        connect();
+      }
+    };
+
     connect();
+    window.addEventListener("online", handleReconnectTrigger);
+    document.addEventListener("visibilitychange", handleReconnectTrigger);
 
     return () => {
+      unmounted = true;
       clearTimeout(reconnectTimer);
+      window.removeEventListener("online", handleReconnectTrigger);
+      document.removeEventListener("visibilitychange", handleReconnectTrigger);
       if (ws) {
         ws.onclose = null;
         ws.close();
       }
     };
-  }, [token, loadAlerts]);
+  }, [token, loadAlerts, onSessionExpired]);
 
   const acknowledge = async (alertId) => {
+    setActionError("");
     try {
       await api.post(`/alerts/${alertId}/acknowledge`, {}, token);
       loadAlerts();
     } catch (e) {
-      alert(e.message);
+      setActionError(e.message || "Erro ao confirmar atendimento.");
     }
   };
 
@@ -99,237 +223,537 @@ export default function CarerScreen({ session, onLogout, onBackToProfiles }) {
     const alertId = confirmResolveId;
     setConfirmResolveId(null);
     if (!alertId) return;
+    setActionError("");
     try {
       await api.post(`/alerts/${alertId}/resolve`, { notes: "Resolvido pelo cuidador" }, token);
       loadAlerts();
     } catch (e) {
-      alert(e.message);
+      setActionError(e.message || "Erro ao encerrar alerta.");
     }
   };
 
-  const fmtTime = (iso) => {
-    if (!iso) return "";
-    return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const openEditDependent = (dependent) => {
+    setEditName(dependent.name);
+    setEditPin("");
+    setEditConfirmPin("");
+    setEditError("");
+    setCopiedId(false);
+    setEditModal(dependent);
   };
 
-  const fmtDate = (iso) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    const hoje = new Date();
-    if (d.toDateString() === hoje.toDateString()) return "Hoje";
-    const ontem = new Date(hoje);
-    ontem.setDate(hoje.getDate() - 1);
-    if (d.toDateString() === ontem.toDateString()) return "Ontem";
-    return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+  const handleSaveDependent = async () => {
+    if (!editName.trim()) return setEditError("O nome não pode ficar vazio.");
+    if (editPin && editPin !== editConfirmPin) return setEditError("Os PINs não coincidem.");
+
+    setEditLoading(true);
+    setEditError("");
+    try {
+      const body = { name: editName.trim() };
+      if (editPin) body.pin = editPin;
+      const data = await api.patch(`/profiles/${editModal.id}`, body, token);
+      setDependents((prev) =>
+        prev.map((d) => (d.id === data.profile.id ? { ...d, ...data.profile } : d))
+      );
+      setEditModal(null);
+    } catch (e) {
+      setEditError(e.message || "Erro ao salvar alterações.");
+    } finally {
+      setEditLoading(false);
+    }
   };
 
-  const sectionLabel = (txt) => (
-    <p style={{ fontSize: "11px", fontWeight: 600, color: G.gray400, textTransform: "uppercase", letterSpacing: "1px", margin: "0 0 10px" }}>
-      {txt}
-    </p>
-  );
+  const handleCopyId = async () => {
+    if (!editModal?.id) return;
+    try {
+      await navigator.clipboard.writeText(editModal.id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    } catch {
+      // clipboard unavailable
+    }
+  };
+
+  const handleForceLogout = async () => {
+    setConfirmForceLogout(false);
+    if (!editModal?.id || !userId) {
+      setEditError("Não foi possível identificar o usuário para desconectar.");
+      return;
+    }
+    setEditLoading(true);
+    setEditError("");
+    try {
+      await api.post("/auth/force-logout", { userId, profileId: editModal.id }, token);
+      setEditModal(null);
+    } catch (e) {
+      setEditError(e.message || "Erro ao desconectar dependente.");
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const stripeColor = (status) => {
+    if (status === "escalated") return "border-l-emergencia";
+    if (status === "acknowledged") return "border-l-cuidado";
+    return "border-l-atencao";
+  };
 
   return (
-    <PhoneFrame>
-      {/* ── Toast de novo alerta ── */}
-      {notif && (
-        <div style={{
-          position: "absolute", top: "54px", left: "16px", right: "16px",
-          background: G.red, color: G.white, borderRadius: "16px",
-          padding: "14px 16px", zIndex: 200,
-          boxShadow: "0 8px 24px rgba(220,38,38,0.4)",
-          animation: "slideDown 0.3s ease",
-        }}>
-          <p style={{ margin: 0, fontWeight: 700, fontSize: "14px" }}>🚨 {notif.dependentName} precisa de ajuda!</p>
-          <p style={{ margin: "2px 0 0", fontSize: "12px", opacity: 0.85 }}>às {fmtTime(notif.emittedAt)}</p>
-        </div>
+    <PhoneFrame bgClass="bg-fundo">
+      <ConnectionBanner isConnected={isOnline && wsConnected} />
+
+      {alertBanners.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            setAlertBanners([]);
+            setActiveTab("home");
+          }}
+          className="sticky top-0 z-30 flex w-full items-center justify-between gap-3 bg-emergencia px-4 py-3.5 text-left text-superficie focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-texto"
+        >
+          <div className="flex items-center gap-2.5">
+            <Siren size={24} weight="fill" className="shrink-0" aria-hidden="true" />
+            <div>
+              <p className="m-0 text-[16px] font-bold">
+                {alertBanners.length > 1
+                  ? `${alertBanners.length} novos alertas de emergência`
+                  : `${alertBanners[0].dependentName || "Dependente"} pediu ajuda`}
+              </p>
+              <p className="m-0 text-[14px] opacity-90">
+                Toque aqui para dispensar este aviso
+              </p>
+            </div>
+          </div>
+          <X size={22} weight="bold" className="shrink-0" aria-hidden="true" />
+        </button>
       )}
 
-      {/* ── Header ── */}
-      <div style={{ padding: "16px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <p style={{ margin: 0, fontSize: "13px", color: G.gray400 }}>Cuidador</p>
-          <p style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: G.gray800 }}>{profile.name}</p>
+      <header className="border-b border-borda bg-superficie px-4 pt-4 pb-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="m-0 text-[14px] font-semibold text-texto-suave">Área do cuidador</p>
+            <h1 className="m-0 font-display text-[24px] leading-tight font-bold text-texto">
+              {profile?.name}
+            </h1>
+          </div>
+          <div
+            className={`inline-flex items-center gap-1.5 rounded-[8px] border px-2.5 py-1 text-[13px] font-semibold ${
+              isOnline && wsConnected
+                ? "border-cuidado/30 bg-cuidado-suave text-cuidado"
+                : "border-atencao/30 bg-atencao-suave text-atencao"
+            }`}
+          >
+            {isOnline && wsConnected ? (
+              <>
+                <WifiHigh size={16} weight="bold" aria-hidden="true" />
+                <span>Ao vivo</span>
+              </>
+            ) : (
+              <>
+                <WifiSlash size={16} weight="bold" aria-hidden="true" />
+                <span>Reconectando</span>
+              </>
+            )}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          {activeAlerts.length > 0 && (
-            <div style={{ background: G.red, color: G.white, borderRadius: "20px", padding: "4px 10px", fontSize: "12px", fontWeight: 700 }}>
-              {activeAlerts.length} ativo{activeAlerts.length > 1 ? "s" : ""}
-            </div>
-          )}
+
+        <div className="mt-3 flex gap-2">
           {onBackToProfiles && (
-            <button onClick={onBackToProfiles} style={{ background: G.gray100, border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: G.gray600, cursor: "pointer" }}>
-              Perfis
+            <button
+              type="button"
+              onClick={onBackToProfiles}
+              className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[8px] border border-borda bg-fundo px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+            >
+              <Users size={18} weight="bold" aria-hidden="true" />
+              <span>Perfis</span>
             </button>
           )}
-          <button onClick={() => setConfirmLogoutModal(true)} style={{ background: G.gray100, border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: G.gray600, cursor: "pointer" }}>
-            Sair
+          <button
+            type="button"
+            onClick={() => setConfirmLogoutModal(true)}
+            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[8px] border border-borda bg-fundo px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+          >
+            <SignOut size={18} weight="bold" aria-hidden="true" />
+            <span>Sair</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* ── Tab bar ── */}
-      <div style={{ display: "flex", margin: "16px 20px 0", background: G.gray100, borderRadius: "12px", padding: "4px" }}>
-        {[["home", "Alertas"], ["history", "Histórico"], ["dependents", "Dependentes"]].map(([v, l]) => (
-          <button key={v} onClick={() => setView(v)} style={{
-            flex: 1, padding: "8px 4px", background: view === v ? G.white : "transparent",
-            border: "none", borderRadius: "8px", fontSize: "12px", fontWeight: 600,
-            color: view === v ? G.gray800 : G.gray400, cursor: "pointer",
-          }}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <Tabs.Root
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="flex flex-1 flex-col"
+      >
+        <main className="flex-1 overflow-y-auto px-4 pt-4 pb-28">
+          {actionError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-[8px] border border-emergencia bg-emergencia-suave p-3 text-[16px] font-semibold text-emergencia"
+            >
+              {actionError}
+            </div>
+          )}
 
-      {/* ── Content ── */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 24px" }}>
-
-        {/* ALERTAS ATIVOS */}
-        {view === "home" && (
-          <>
-            {sectionLabel("Alertas ativos")}
+          <Tabs.Content value="home" className="focus-visible:outline-none">
+            <h2 className="mt-0 mb-3 font-display text-[20px] font-bold text-texto">
+              Alertas ativos
+            </h2>
             {activeAlerts.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "40px 20px", background: G.greenLight, borderRadius: "16px" }}>
-                <div style={{ fontSize: "40px", marginBottom: "8px" }}>✅</div>
-                <p style={{ margin: 0, fontWeight: 600, color: G.green, fontSize: "15px" }}>Tudo bem!</p>
-                <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray400 }}>Nenhum alerta ativo no momento</p>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                {activeAlerts.map(alert => (
-                  <div key={alert.id} style={{
-                    background: G.white,
-                    border: `2px solid ${alert.status === "escalated" ? G.red : G.blue}`,
-                    borderRadius: "16px", padding: "16px",
-                    boxShadow: `0 4px 12px ${alert.status === "escalated" ? "rgba(220,38,38,0.15)" : "rgba(37,99,235,0.08)"}`,
-                  }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
-                      <div>
-                        <p style={{ margin: 0, fontWeight: 700, fontSize: "16px", color: G.gray800 }}>
-                          🙋 {alert.dependent_name || "Dependente"}
-                        </p>
-                        <p style={{ margin: "2px 0 0", fontSize: "12px", color: G.gray400 }}>
-                          às {fmtTime(alert.emitted_at)}
-                        </p>
-                      </div>
-                      <StatusBadge status={alert.status} />
-                    </div>
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      {!["acknowledged", "escalated"].includes(alert.status) && (
-                        <Btn onClick={() => acknowledge(alert.id)} color={G.blue} style={{ fontSize: "13px", padding: "10px" }}>
-                          ✓ Confirmar
-                        </Btn>
-                      )}
-                      <Btn onClick={() => setConfirmResolveId(alert.id)} color={G.green} style={{ fontSize: "13px", padding: "10px" }}>
-                        ✓ Encerrar
-                      </Btn>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* HISTÓRICO */}
-        {view === "history" && (
-          <>
-            {sectionLabel("Histórico de chamados")}
-            {history.length === 0 ? (
-              <p style={{ color: G.gray400, textAlign: "center", padding: "40px 0", fontSize: "14px" }}>Nenhum histórico ainda</p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {history.map(a => (
-                  <div key={a.id} style={{
-                    background: G.white, border: `1px solid ${G.gray200}`,
-                    borderRadius: "14px", padding: "14px 16px",
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                  }}>
-                    <div>
-                      <p style={{ margin: 0, fontSize: "14px", fontWeight: 600, color: G.gray800 }}>
-                        {a.dependent_name || "Dependente"}
-                      </p>
-                      <p style={{ margin: "2px 0 0", fontSize: "12px", color: G.gray400 }}>
-                        {fmtDate(a.emitted_at)} às {fmtTime(a.emitted_at)}
-                      </p>
-                    </div>
-                    <StatusBadge status={a.status} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* DEPENDENTES */}
-        {view === "dependents" && (
-          <>
-            {sectionLabel(`Meus dependentes (${dependents.length})`)}
-
-            {dependents.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "32px 20px", background: G.gray50, borderRadius: "16px", marginBottom: "16px" }}>
-                <div style={{ fontSize: "36px", marginBottom: "8px" }}>🔗</div>
-                <p style={{ margin: 0, fontWeight: 600, color: G.gray800, fontSize: "15px" }}>Nenhum dependente vinculado</p>
-                <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray400 }}>
-                  Vincule um dependente para começar a receber alertas
+              <div className="flex flex-col items-center rounded-[10px] border border-borda bg-superficie px-5 py-10 text-center">
+                <CheckCircle size={48} weight="bold" className="mb-3 text-cuidado" aria-hidden="true" />
+                <p className="m-0 text-[18px] font-bold text-texto">Tudo tranquilo</p>
+                <p className="mt-1 mb-0 text-[16px] text-texto-secundario">
+                  Nenhum alerta ativo no momento.
                 </p>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-                {dependents.map(d => (
-                  <div key={d.id} style={{
-                    background: G.white, border: `1px solid ${G.gray200}`,
-                    borderRadius: "14px", padding: "14px 16px",
-                    display: "flex", alignItems: "center", gap: "12px",
-                  }}>
-                    <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: G.redLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px" }}>
-                      🙋
+              <div className="flex flex-col gap-3">
+                {activeAlerts.map((alert) => {
+                  const hasCoords = alert.latitude != null && alert.longitude != null;
+                  const mapsUrl =
+                    alert.mapsUrl ||
+                    (hasCoords ? `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}` : null);
+
+                  return (
+                    <article
+                      key={alert.id}
+                      className={`rounded-[10px] border border-borda border-l-[6px] bg-superficie p-4 ${stripeColor(alert.status)}`}
+                    >
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h3 className="m-0 flex items-center gap-2 text-[20px] font-bold text-texto">
+                            <UserCircle size={24} weight="bold" className="text-texto-secundario" aria-hidden="true" />
+                            <span>{alert.dependent_name || "Dependente"}</span>
+                          </h3>
+                          <p className="mt-1 mb-0 text-[16px] font-medium text-texto-secundario">
+                            Às {formatTime(alert.emitted_at)} ({formatElapsed(alert.emitted_at, nowMs)})
+                          </p>
+                        </div>
+                        <StatusBadge status={alert.status} />
+                      </div>
+
+                      {(alert.address || mapsUrl) && (
+                        <div className="mb-4 rounded-[8px] border border-borda bg-fundo p-3 text-[16px] text-texto">
+                          {alert.address && (
+                            <p className="m-0 flex items-start gap-2">
+                              <MapPin size={20} weight="bold" className="mt-0.5 shrink-0 text-emergencia" aria-hidden="true" />
+                              <span>{alert.address}</span>
+                            </p>
+                          )}
+                          {mapsUrl && (
+                            <a
+                              href={mapsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex min-h-[48px] items-center gap-2 font-semibold text-cuidado underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                            >
+                              <MapPin size={18} weight="bold" aria-hidden="true" />
+                              <span>Abrir localização no mapa</span>
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex flex-col gap-2.5 sm:flex-row">
+                        {!["acknowledged", "escalated"].includes(alert.status) && (
+                          <Btn
+                            onClick={() => acknowledge(alert.id)}
+                            variant="primario"
+                            size="normal"
+                          >
+                            <PersonSimpleRun size={20} weight="bold" aria-hidden="true" />
+                            <span>Estou indo</span>
+                          </Btn>
+                        )}
+                        <Btn
+                          onClick={() => setConfirmResolveId(alert.id)}
+                          variant="secundario"
+                          size="normal"
+                        >
+                          <Check size={20} weight="bold" aria-hidden="true" />
+                          <span>Encerrar</span>
+                        </Btn>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </Tabs.Content>
+
+          <Tabs.Content value="history" className="focus-visible:outline-none">
+            <h2 className="mt-0 mb-3 font-display text-[20px] font-bold text-texto">
+              Histórico de chamados
+            </h2>
+            {history.length === 0 ? (
+              <div className="rounded-[10px] border border-borda bg-superficie p-8 text-center text-[16px] text-texto-secundario">
+                Nenhum chamado registrado ainda.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {history.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-[10px] border border-borda bg-superficie p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="m-0 text-[18px] font-bold text-texto">
+                          {item.dependent_name || "Dependente"}
+                        </p>
+                        <p className="mt-0.5 mb-0 text-[16px] text-texto-secundario">
+                          {formatDate(item.emitted_at)} às {formatTime(item.emitted_at)}
+                        </p>
+                      </div>
+                      <StatusBadge status={item.status} />
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <p style={{ margin: 0, fontWeight: 600, color: G.gray800, fontSize: "14px" }}>{d.name}</p>
-                      <p style={{ margin: "2px 0 0", fontSize: "11px", color: G.gray400, fontFamily: "monospace" }}>
-                        ID: {d.id.slice(0, 8)}…
+                    {item.address && (
+                      <p className="mt-2 mb-0 flex items-start gap-1.5 text-[15px] text-texto-secundario">
+                        <MapPin size={18} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+                        <span>{item.address}</span>
                       </p>
-                    </div>
-                    <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: G.green }} />
+                    )}
                   </div>
                 ))}
               </div>
             )}
-          </>
-        )}
-      </div>
+          </Tabs.Content>
 
+          <Tabs.Content value="dependents" className="focus-visible:outline-none">
+            <h2 className="mt-0 mb-3 font-display text-[20px] font-bold text-texto">
+              Dependentes ({dependents.length})
+            </h2>
+            {dependents.length === 0 ? (
+              <div className="flex flex-col items-center rounded-[10px] border border-borda bg-superficie px-5 py-10 text-center">
+                <LinkBreak size={44} weight="bold" className="mb-3 text-texto-suave" aria-hidden="true" />
+                <p className="m-0 text-[18px] font-bold text-texto">Nenhum dependente vinculado</p>
+                <p className="mt-1 mb-0 text-[16px] text-texto-secundario">
+                  Crie um perfil de dependente na tela de perfis para começar.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {dependents.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center justify-between gap-3 rounded-[10px] border border-borda bg-superficie p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-cuidado-suave text-cuidado">
+                        <UserCircle size={28} weight="bold" aria-hidden="true" />
+                      </div>
+                      <div>
+                        <p className="m-0 text-[18px] font-bold text-texto">{d.name}</p>
+                        <p className="mt-0.5 mb-0 inline-flex items-center gap-1.5 text-[15px] font-semibold text-cuidado">
+                          <CheckCircle size={16} weight="fill" aria-hidden="true" />
+                          <span>Vinculado</span>
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openEditDependent(d)}
+                      className="inline-flex min-h-[48px] items-center gap-1.5 rounded-[8px] border border-borda bg-fundo px-3.5 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                    >
+                      <PencilSimple size={18} weight="bold" aria-hidden="true" />
+                      <span>Editar</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Tabs.Content>
+        </main>
 
+        <Tabs.List
+          aria-label="Navegação do cuidador"
+          className="fixed inset-x-0 bottom-0 z-20 mx-auto grid w-full max-w-[480px] grid-cols-3 border-t border-borda bg-superficie"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          <Tabs.Trigger
+            value="home"
+            className="relative flex min-h-[64px] flex-col items-center justify-center gap-1 px-2 py-2 text-[14px] font-semibold text-texto-secundario data-[state=active]:border-t-3 data-[state=active]:border-t-cuidado data-[state=active]:text-cuidado focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-cuidado"
+          >
+            <div className="relative">
+              <BellRinging size={22} weight="bold" aria-hidden="true" />
+              {activeAlerts.length > 0 && (
+                <span className="absolute -top-2 -right-3 inline-flex min-w-[20px] items-center justify-center rounded-full bg-emergencia px-1 text-[12px] font-bold text-superficie">
+                  {activeAlerts.length}
+                </span>
+              )}
+            </div>
+            <span>Alertas</span>
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
+            value="history"
+            className="flex min-h-[64px] flex-col items-center justify-center gap-1 px-2 py-2 text-[14px] font-semibold text-texto-secundario data-[state=active]:border-t-3 data-[state=active]:border-t-cuidado data-[state=active]:text-cuidado focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-cuidado"
+          >
+            <ClockCounterClockwise size={22} weight="bold" aria-hidden="true" />
+            <span>Histórico</span>
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
+            value="dependents"
+            className="flex min-h-[64px] flex-col items-center justify-center gap-1 px-2 py-2 text-[14px] font-semibold text-texto-secundario data-[state=active]:border-t-3 data-[state=active]:border-t-cuidado data-[state=active]:text-cuidado focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-cuidado"
+          >
+            <Users size={22} weight="bold" aria-hidden="true" />
+            <span>Dependentes</span>
+          </Tabs.Trigger>
+        </Tabs.List>
+      </Tabs.Root>
+
+      <Dialog.Root open={Boolean(editModal)} onOpenChange={(open) => { if (!open) setEditModal(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
+          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[90dvh] w-full max-w-[480px] overflow-y-auto rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 focus-visible:outline-none">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
+            <Dialog.Title className="m-0 font-display text-[22px] font-bold text-texto">
+              Editar dependente
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 mb-4 text-[16px] text-texto-secundario">
+              Ajuste o nome, o PIN ou desconecte o aparelho do dependente.
+            </Dialog.Description>
+
+            <div className="flex flex-col gap-4">
+              <div>
+                <label htmlFor="edit-dep-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                  Nome do perfil
+                </label>
+                <input
+                  id="edit-dep-name"
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="edit-dep-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                  Novo PIN (deixe vazio para não alterar)
+                </label>
+                <input
+                  id="edit-dep-pin"
+                  type="password"
+                  inputMode="numeric"
+                  value={editPin}
+                  onChange={(e) => setEditPin(e.target.value)}
+                  placeholder="Novo PIN"
+                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                />
+              </div>
+
+              {editPin && (
+                <div>
+                  <label htmlFor="edit-dep-confirm-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                    Confirmar PIN
+                  </label>
+                  <input
+                    id="edit-dep-confirm-pin"
+                    type="password"
+                    inputMode="numeric"
+                    value={editConfirmPin}
+                    onChange={(e) => setEditConfirmPin(e.target.value)}
+                    placeholder="Repita o PIN"
+                    className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                  />
+                </div>
+              )}
+
+              <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
+                <p className="mt-0 mb-1 text-[14px] font-semibold text-texto-secundario">
+                  ID do perfil
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <code className="break-all text-[14px] text-texto">{editModal?.id}</code>
+                  <button
+                    type="button"
+                    onClick={handleCopyId}
+                    className="inline-flex min-h-[48px] shrink-0 items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[15px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                  >
+                    {copiedId ? (
+                      <>
+                        <Check size={18} weight="bold" className="text-cuidado" aria-hidden="true" />
+                        <span>Copiado</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={18} weight="bold" aria-hidden="true" />
+                        <span>Copiar</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-[8px] border border-emergencia/40 bg-emergencia-suave p-3.5">
+                <p className="mt-0 mb-1 text-[16px] font-bold text-emergencia">
+                  Desconectar aparelho
+                </p>
+                <p className="mt-0 mb-3 text-[15px] text-texto">
+                  Encerra a sessão deste dependente em todos os celulares conectados.
+                </p>
+                <Btn
+                  onClick={() => setConfirmForceLogout(true)}
+                  variant="perigo"
+                  size="normal"
+                  disabled={editLoading}
+                >
+                  <SignOut size={18} weight="bold" aria-hidden="true" />
+                  <span>Desconectar dependente</span>
+                </Btn>
+              </div>
+
+              {editError && (
+                <p role="alert" className="m-0 text-[16px] font-semibold text-emergencia">
+                  {editError}
+                </p>
+              )}
+
+              <div className="flex flex-col gap-2.5 pt-2">
+                <Btn onClick={handleSaveDependent} variant="primario" size="normal" disabled={editLoading}>
+                  {editLoading ? "Salvando…" : "Salvar alterações"}
+                </Btn>
+                <Btn onClick={() => setEditModal(null)} variant="secundario" size="normal">
+                  Cancelar
+                </Btn>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <ConfirmModal
-        isOpen={!!confirmResolveId}
-        title="Encerrar Alerta?"
-        message="Tem certeza que deseja encerrar este alerta de emergência? Esta ação confirmará que o dependente está seguro."
+        isOpen={Boolean(confirmResolveId)}
+        title="Encerrar alerta?"
+        message="Confirmar que o dependente está seguro e encerrar este atendimento?"
         confirmText="Sim, encerrar"
         cancelText="Cancelar"
         onConfirm={handleConfirmResolve}
         onCancel={() => setConfirmResolveId(null)}
-        confirmColor={G.green}
       />
 
       <ConfirmModal
         isOpen={confirmLogoutModal}
-        title="Confirmar Saída"
-        message="Tem certeza que deseja sair do aplicativo?"
+        title="Sair da conta?"
+        message="Tem certeza que deseja sair do aplicativo neste aparelho?"
         confirmText="Sim, sair"
-        cancelText="Não, continuar"
+        cancelText="Continuar conectado"
         onConfirm={onLogout}
         onCancel={() => setConfirmLogoutModal(false)}
-        isDestructive={true}
+        isDestructive
       />
 
-      <style>{`
-        @keyframes slideDown {
-          from { transform: translateY(-20px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-      `}</style>
+      <ConfirmModal
+        isOpen={confirmForceLogout}
+        title="Desconectar dependente?"
+        message="O dependente será desconectado de todos os aparelhos imediatamente."
+        confirmText="Sim, desconectar"
+        cancelText="Cancelar"
+        onConfirm={handleForceLogout}
+        onCancel={() => setConfirmForceLogout(false)}
+        isDestructive
+      />
     </PhoneFrame>
   );
 }

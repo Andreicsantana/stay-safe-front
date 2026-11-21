@@ -1,61 +1,168 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  HourglassMedium,
+  PersonSimpleRun,
+  Siren,
+  Timer,
+  WarningCircle,
+  X,
+} from "@phosphor-icons/react";
 import { api, WS_URL } from "../services/api";
-import { G } from "../constants/colors";
-import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
+import Btn from "../components/Btn";
+import PinPad from "../components/PinPad";
+import ConnectionBanner from "../components/ConnectionBanner";
+import { notifyAlertSent, notifyAlertAcknowledged } from "../utils/feedback";
 
-export default function DependentScreen({ session, onLogout }) {
+export default function DependentScreen({ session, onLogout, onSessionExpired }) {
   const { token, profile } = session;
   const [activeAlert, setActiveAlert] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [showPinModal, setShowPinModal] = useState(false);
+  const [sendingCountdown, setSendingCountdown] = useState(null);
+  const [sendingRequest, setSendingRequest] = useState(false);
+  const [emitError, setEmitError] = useState("");
+  const [showResolveModal, setShowResolveModal] = useState(false);
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
+  const [resolving, setResolving] = useState(false);
   const [timeLeft, setTimeLeft] = useState(null);
-  const [escalated, setEscalated] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [wsConnected, setWsConnected] = useState(false);
+
   const wsRef = useRef(null);
   const timerRef = useRef(null);
+  const countdownRef = useRef(null);
+  const wakeLockRef = useRef(null);
+
+  const hasActive =
+    Boolean(activeAlert) &&
+    !["resolved_carer", "resolved_dependent", "cancelled"].includes(activeAlert?.status);
+
+  const loadActiveAlert = useCallback(async () => {
+    try {
+      const d = await api.get("/alerts/active", token);
+      if (d.activeAlerts?.length) {
+        setActiveAlert(d.activeAlerts[0]);
+      } else {
+        setActiveAlert(null);
+      }
+    } catch (err) {
+      if (err.status === 401 && onSessionExpired) {
+        onSessionExpired();
+      }
+    }
+  }, [token, onSessionExpired]);
 
   useEffect(() => {
-    api.get("/alerts/active", token)
-      .then(d => {
-        if (d.activeAlerts?.length) setActiveAlert(d.activeAlerts[0]);
-      })
-      .catch(err => {
-        console.error("Erro ao obter alerta ativo:", err);
-      });
-  }, [token]);
+    const timer = setTimeout(() => {
+      loadActiveAlert();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadActiveAlert]);
 
   useEffect(() => {
-    const ws = new WebSocket(`${WS_URL}?token=${token}`);
-    wsRef.current = ws;
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "ALERT_ACKNOWLEDGED") {
-          setActiveAlert(a => a ? { ...a, status: "acknowledged" } : a);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    let ws = null;
+    let reconnectTimer = null;
+    let backoffMs = 1000;
+    let unmounted = false;
+
+    const connect = () => {
+      if (unmounted) return;
+      clearTimeout(reconnectTimer);
+      ws = new WebSocket(`${WS_URL}?token=${token}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        backoffMs = 1000;
+        setWsConnected(true);
+        loadActiveAlert();
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "ALERT_STATE") {
+            setActiveAlert(msg.alert || null);
+          }
+          if (msg.type === "ALERT_ACKNOWLEDGED") {
+            setActiveAlert((a) => (a ? { ...a, status: "acknowledged" } : a));
+            notifyAlertAcknowledged();
+          }
+          if (msg.type === "ALERT_RESOLVED") {
+            setActiveAlert(null);
+            setShowResolveModal(false);
+            setPin("");
+            clearInterval(timerRef.current);
+          }
+          if (msg.type === "ALERT_ESCALATED") {
+            setActiveAlert((a) => (a ? { ...a, status: "escalated" } : a));
+          }
+          if (msg.type === "FORCE_LOGOUT") {
+            onLogout();
+          }
+        } catch {
+          // ignore malformed ws message
         }
-        if (msg.type === "ALERT_RESOLVED") {
-          setActiveAlert(null);
-          setEscalated(false);
-          clearInterval(timerRef.current);
+      };
+
+      ws.onclose = (event) => {
+        setWsConnected(false);
+        if (unmounted) return;
+        if (event.code === 4002 && onSessionExpired) {
+          onSessionExpired();
+          return;
         }
-        if (msg.type === "ALERT_ESCALATED") {
-          setEscalated(true);
-          setActiveAlert(a => a ? { ...a, status: "escalated" } : a);
-        }
-        if (msg.type === "FORCE_LOGOUT") {
-          onLogout();
-        }
-      } catch (err) {
-        console.error("Erro ao processar mensagem do WebSocket:", err);
+        reconnectTimer = setTimeout(connect, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, 5000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    };
+
+    const handleReconnectTrigger = () => {
+      if (document.visibilityState === "hidden") return;
+      if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+        backoffMs = 1000;
+        connect();
       }
     };
-    return () => ws.close();
-  }, [token, onLogout]);
+
+    connect();
+    window.addEventListener("online", handleReconnectTrigger);
+    document.addEventListener("visibilitychange", handleReconnectTrigger);
+
+    return () => {
+      unmounted = true;
+      clearTimeout(reconnectTimer);
+      window.removeEventListener("online", handleReconnectTrigger);
+      document.removeEventListener("visibilitychange", handleReconnectTrigger);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    };
+  }, [token, onLogout, onSessionExpired, loadActiveAlert]);
 
   useEffect(() => {
-    if (!activeAlert || ["acknowledged", "resolved_carer", "resolved_dependent", "escalated"].includes(activeAlert.status)) {
+    if (
+      !activeAlert ||
+      ["acknowledged", "resolved_carer", "resolved_dependent", "escalated", "cancelled"].includes(
+        activeAlert.status
+      )
+    ) {
       clearInterval(timerRef.current);
       return;
     }
@@ -71,18 +178,67 @@ export default function DependentScreen({ session, onLogout }) {
     return () => clearInterval(timerRef.current);
   }, [activeAlert]);
 
-  const emitAlert = async () => {
-    setLoading(true);
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      if (!hasActive || !("wakeLock" in navigator)) return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+      } catch {
+        // Wake Lock rejected or unsupported
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      if (wakeLockRef.current) {
+        try {
+          await wakeLockRef.current.release();
+        } catch {
+          // ignore release error
+        }
+        wakeLockRef.current = null;
+      }
+    };
+
+    if (hasActive) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && hasActive) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      releaseWakeLock();
+    };
+  }, [hasActive]);
+
+  const dispatchAlert = useCallback(async () => {
+    setSendingRequest(true);
+    setEmitError("");
 
     const sendToApi = async (coords = {}) => {
       try {
         const data = await api.post("/alerts/emit", coords, token);
-        setActiveAlert({ id: data.alertId, status: "pending", emitted_at: new Date().toISOString() });
-        setEscalated(false);
+        setActiveAlert({
+          id: data.alertId,
+          status: data.status || "pending",
+          emitted_at: data.emittedAt || new Date().toISOString(),
+        });
+        notifyAlertSent();
       } catch (e) {
-        alert(e.message);
+        if (e.status === 401 && onSessionExpired) {
+          onSessionExpired();
+          return;
+        }
+        setEmitError(e.message || "Não foi possível enviar o alerta.");
       } finally {
-        setLoading(false);
+        setSendingRequest(false);
       }
     };
 
@@ -94,239 +250,253 @@ export default function DependentScreen({ session, onLogout }) {
             longitude: position.coords.longitude,
           });
         },
-        (error) => {
-          console.warn("Erro ao obter localização:", error.message);
-          sendToApi({}); // envia sem coords
+        () => {
+          sendToApi({});
         },
         { timeout: 10000, enableHighAccuracy: true }
       );
     } else {
       sendToApi({});
     }
+  }, [token, onSessionExpired]);
+
+  useEffect(() => {
+    if (sendingCountdown === null) return;
+    countdownRef.current = setTimeout(() => {
+      if (sendingCountdown <= 1) {
+        setSendingCountdown(null);
+        dispatchAlert();
+      } else {
+        setSendingCountdown((c) => (c !== null ? c - 1 : null));
+      }
+    }, 1000);
+    return () => clearTimeout(countdownRef.current);
+  }, [sendingCountdown, dispatchAlert]);
+
+  const handleHelpPress = () => {
+    setEmitError("");
+    if (!navigator.onLine) {
+      setEmitError("Você está sem internet. Conecte-se para pedir ajuda.");
+      return;
+    }
+    setSendingCountdown(3);
   };
 
-  const handleResolveByPin = async () => {
+  const handleCancelSending = () => {
+    clearTimeout(countdownRef.current);
+    setSendingCountdown(null);
+  };
+
+  const handleResolve = async (pinValue) => {
     setPinError("");
+    setResolving(true);
     try {
-      await api.post(`/alerts/${activeAlert.id}/resolve`, { pin }, token);
+      const body = pinValue ? { pin: pinValue } : {};
+      await api.post(`/alerts/${activeAlert.id}/resolve`, body, token);
       setActiveAlert(null);
-      setShowPinModal(false);
+      setShowResolveModal(false);
       setPin("");
     } catch (e) {
       setPinError(e.message || "PIN incorreto");
+    } finally {
+      setResolving(false);
     }
   };
 
-  const statusLabel = {
-    pending: "Aguardando cuidador...",
-    notified: "Cuidador sendo notificado...",
-    acknowledged: "Cuidador a caminho! ✓",
-    escalated: "Autoridades foram acionadas",
-  };
+  const isAcknowledged = activeAlert?.status === "acknowledged";
+  const isEscalated = activeAlert?.status === "escalated";
 
-  const hasActive = !!activeAlert && !["resolved_carer", "resolved_dependent"].includes(activeAlert?.status);
+  const activeBgClass = hasActive
+    ? isEscalated
+      ? "bg-emergencia text-superficie"
+      : isAcknowledged
+        ? "bg-cuidado text-superficie"
+        : "bg-atencao text-superficie"
+    : "bg-fundo text-texto";
+
+  const firstName = profile?.name?.split(" ")[0] || profile?.name || "";
 
   return (
-    <PhoneFrame bg={hasActive ? (escalated ? G.redLight : G.blueLight) : G.bg}>
-      <div style={{ padding: "16px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <p style={{ margin: 0, fontSize: "13px", color: G.gray400 }}>Olá,</p>
-          <p style={{ margin: 0, fontSize: "16px", fontWeight: 600, color: G.gray800 }}>{profile.name}</p>
-        </div>
-      </div>
+    <PhoneFrame bgClass={activeBgClass}>
+      <ConnectionBanner isConnected={isOnline && wsConnected} />
 
-      {/* ── Profile ID (para compartilhar com o cuidador) ── */}
-      <div style={{ margin: "0 20px", padding: "10px 14px", background: G.gray50, borderRadius: "12px", border: `1px solid ${G.gray200}` }}>
-        <p style={{ margin: 0, fontSize: "11px", color: G.gray400, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-          Meu ID de perfil
-        </p>
-        <p style={{ margin: "2px 0 0", fontSize: "11px", color: G.gray600, fontFamily: "monospace", wordBreak: "break-all" }}>
-          {profile.id}
-        </p>
-        <p style={{ margin: "2px 0 0", fontSize: "10px", color: G.gray400 }}>
-          Compartilhe com seu cuidador para ser vinculado
-        </p>
-      </div>
+      {!hasActive ? (
+        <div className="flex flex-1 flex-col justify-between px-5 pt-6 pb-6">
+          <header>
+            <h1 className="m-0 font-display text-[32px] leading-tight font-bold text-texto">
+              Olá, {firstName}
+            </h1>
+          </header>
 
-      {hasActive && (
-        <div style={{
-          margin: "20px",
-          padding: "16px",
-          background: escalated 
-            ? G.redLight 
-            : activeAlert?.status === "acknowledged" 
-              ? G.greenLight 
-              : G.blueLight,
-          borderRadius: "16px",
-          border: `1.5px solid ${
-            escalated 
-              ? G.red 
-              : activeAlert?.status === "acknowledged" 
-                ? G.green 
-                : G.blue
-          }`,
-        }}>
-          <p style={{ 
-            margin: 0, 
-            fontWeight: 700, 
-            fontSize: "15px", 
-            color: escalated 
-              ? G.redDark 
-              : activeAlert?.status === "acknowledged" 
-                ? G.green 
-                : G.blue 
-          }}>
-            {escalated 
-              ? "🚨 Autoridades chamadas" 
-              : activeAlert?.status === "acknowledged"
-                ? "🏃 Cuidador a Caminho!"
-                : "🔔 Alerta ativo"}
-          </p>
-          <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray600 }}>
-            {statusLabel[activeAlert?.status] || "Processando..."}
-          </p>
-          {timeLeft !== null && timeLeft > 0 && !escalated && activeAlert?.status !== "acknowledged" && (
-            <p style={{ margin: "8px 0 0", fontSize: "13px", color: G.blue, fontWeight: 600 }}>
-              ⏱ Autoridades em {timeLeft}s se não atendido
-            </p>
+          {emitError && (
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-[10px] border border-emergencia bg-emergencia-suave p-4 text-[18px] font-semibold text-emergencia"
+            >
+              <WarningCircle size={26} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{emitError}</span>
+            </div>
+          )}
+
+          {sendingCountdown !== null || sendingRequest ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-6 py-4">
+              <div className="flex w-full flex-1 flex-col items-center justify-center rounded-[24px] border-2 border-atencao bg-atencao-suave px-6 py-8 text-center">
+                <HourglassMedium
+                  size={80}
+                  weight="bold"
+                  className="mb-4 text-atencao"
+                  aria-hidden="true"
+                />
+                <p
+                  role="status"
+                  aria-live="assertive"
+                  className="m-0 text-[32px] leading-tight font-bold text-texto"
+                >
+                  {sendingRequest
+                    ? "Enviando ajuda agora…"
+                    : `Enviando em ${sendingCountdown}…`}
+                </p>
+              </div>
+
+              {sendingCountdown !== null && (
+                <button
+                  type="button"
+                  onClick={handleCancelSending}
+                  className="flex min-h-[72px] w-full items-center justify-center gap-3 rounded-[14px] border-2 border-texto bg-superficie px-6 py-4 text-[24px] font-bold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                >
+                  <X size={28} weight="bold" aria-hidden="true" />
+                  <span>Toque aqui para cancelar</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-5 py-4">
+              <button
+                type="button"
+                onClick={handleHelpPress}
+                className="flex min-h-[58dvh] w-full flex-col items-center justify-center gap-4 rounded-[28px] border-2 border-emergencia bg-emergencia px-6 py-8 text-superficie active:opacity-95 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-texto focus-visible:ring-offset-4 focus-visible:ring-offset-fundo"
+              >
+                <Siren size={72} weight="fill" aria-hidden="true" />
+                <span className="text-[44px] leading-none font-bold tracking-wider">
+                  AJUDA
+                </span>
+              </button>
+              <p className="m-0 text-center text-[18px] font-medium text-texto-secundario">
+                Toque para avisar seus cuidadores.
+              </p>
+            </div>
           )}
         </div>
-      )}
-
-      <div style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "20px",
-      }}>
-        {!hasActive ? (
-          <>
-            <p style={{ fontSize: "15px", color: G.gray600, textAlign: "center", marginBottom: "40px" }}>
-              Pressione o botão se precisar de ajuda
-            </p>
-            <button
-              onClick={emitAlert}
-              disabled={loading}
-              style={{
-                width: "220px",
-                height: "220px",
-                borderRadius: "50%",
-                background: loading ? G.gray200 : G.red,
-                border: `8px solid ${loading ? G.gray200 : G.redDark}`,
-                boxShadow: loading ? "none" : `0 0 0 16px ${G.redLight}, 0 20px 60px rgba(220,38,38,0.4)`,
-                cursor: loading ? "not-allowed" : "pointer",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                color: G.white,
-                transition: "all 0.2s",
-              }}
-            >
-              <span style={{ fontSize: "52px", lineHeight: 1 }}>🆘</span>
-              <span style={{ fontSize: "22px", fontWeight: 800, marginTop: "8px", letterSpacing: "2px" }}>
-                {loading ? "..." : "AJUDA"}
-              </span>
-            </button>
-            <p style={{ fontSize: "12px", color: G.gray400, textAlign: "center", marginTop: "32px" }}>
-              Seu cuidador será avisado por SMS, email e ligação
-            </p>
-          </>
-        ) : (
-          <>
-            <div style={{
-              width: "180px",
-              height: "180px",
-              borderRadius: "50%",
-              background: escalated ? G.redLight : G.blueLight,
-              border: `6px solid ${escalated ? G.red : G.blue}`,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: "52px",
-            }}>
-              {escalated ? "🚨" : "⏳"}
+      ) : (
+        <div className="flex flex-1 flex-col justify-between px-6 pt-8 pb-8 text-superficie">
+          <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+            <div className={isAcknowledged ? "" : "animate-pulse-discreto"}>
+              {isEscalated ? (
+                <Siren size={96} weight="fill" aria-hidden="true" />
+              ) : isAcknowledged ? (
+                <PersonSimpleRun size={96} weight="bold" aria-hidden="true" />
+              ) : (
+                <HourglassMedium size={96} weight="bold" aria-hidden="true" />
+              )}
             </div>
 
-            <button
-              onClick={() => setShowPinModal(true)}
-              style={{
-                marginTop: "40px",
-                background: "transparent",
-                border: `1.5px solid ${G.gray200}`,
-                borderRadius: "12px",
-                padding: "12px 24px",
-                fontSize: "14px",
-                color: G.gray600,
-                cursor: "pointer",
-              }}
-            >
-              Encerrar alerta
-            </button>
-            <p style={{ fontSize: "11px", color: G.gray400, marginTop: "6px" }}>Requer PIN de confirmação</p>
-          </>
-        )}
-      </div>
+            <h1 className="m-0 text-[32px] leading-tight font-bold">
+              {isEscalated
+                ? "Estamos tentando outras pessoas."
+                : isAcknowledged
+                  ? "Seu cuidador está a caminho."
+                  : "Ajuda enviada. Aguardando alguém responder."}
+            </h1>
 
-      {showPinModal && (
-        <div style={{
-          position: "absolute",
-          inset: 0,
-          background: "rgba(0,0,0,0.6)",
-          display: "flex",
-          alignItems: "flex-end",
-          zIndex: 100,
-        }}>
-          <div style={{
-            background: G.white,
-            width: "100%",
-            borderRadius: "24px 24px 0 0",
-            padding: "28px 24px 40px",
-          }}>
-            <h3 style={{ margin: "0 0 4px", color: G.gray800 }}>Encerrar alerta</h3>
-            <p style={{ margin: "0 0 20px", fontSize: "13px", color: G.gray400 }}>
-              Digite o PIN para confirmar o encerramento
+            <p className="m-0 text-[20px] leading-snug font-medium opacity-95">
+              Seus cuidadores foram avisados por e-mail e no aplicativo.
             </p>
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="PIN"
-              value={pin}
-              onChange={e => setPin(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "14px",
-                fontSize: "20px",
-                letterSpacing: "6px",
-                textAlign: "center",
-                border: `1.5px solid ${pinError ? G.red : G.gray200}`,
-                borderRadius: "12px",
-                marginBottom: "8px",
-                boxSizing: "border-box",
-              }}
-            />
-            {pinError && <p style={{ color: G.red, fontSize: "13px", margin: "0 0 12px" }}>{pinError}</p>}
-            <div style={{ display: "flex", gap: "10px" }}>
-              <Btn
-                onClick={() => {
-                  setShowPinModal(false);
-                  setPin("");
-                  setPinError("");
-                }}
-                color={G.gray100}
-                textColor={G.gray800}
-              >
-                Cancelar
-              </Btn>
-              <Btn onClick={handleResolveByPin} color={G.green}>Confirmar</Btn>
-            </div>
+
+            {timeLeft !== null && timeLeft > 0 && !isAcknowledged && !isEscalated && (
+              <div className="inline-flex items-center gap-2.5 rounded-[12px] border border-superficie/40 bg-texto/15 px-5 py-3 text-[20px] font-bold">
+                <Timer size={26} weight="bold" aria-hidden="true" />
+                <span>Mais pessoas serão avisadas em {timeLeft}s</span>
+              </div>
+            )}
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPin("");
+              setPinError("");
+              setShowResolveModal(true);
+            }}
+            className="flex min-h-[64px] w-full items-center justify-center gap-2 rounded-[12px] border-2 border-superficie bg-superficie px-6 py-4 text-[24px] font-bold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-superficie"
+          >
+            <span>Encerrar alerta</span>
+          </button>
         </div>
       )}
+
+      <Dialog.Root
+        open={showResolveModal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowResolveModal(false);
+            setPin("");
+            setPinError("");
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
+          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[480px] rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 text-texto focus-visible:outline-none">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
+            <Dialog.Title className="m-0 text-center font-display text-[24px] font-bold text-texto">
+              Encerrar alerta
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 mb-5 text-center text-[18px] text-texto-secundario">
+              {profile?.hasPin === false
+                ? "Confirme se está tudo bem para encerrar."
+                : "Digite o PIN para confirmar."}
+            </Dialog.Description>
+
+            {profile?.hasPin === false ? (
+              <div className="flex flex-col gap-3">
+                <Btn
+                  onClick={() => handleResolve("")}
+                  variant="primario"
+                  size="grande"
+                  disabled={resolving}
+                >
+                  {resolving ? "Encerrando…" : "Sim, estou bem"}
+                </Btn>
+                <Btn
+                  onClick={() => setShowResolveModal(false)}
+                  variant="secundario"
+                  size="grande"
+                >
+                  Voltar
+                </Btn>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <PinPad
+                  value={pin}
+                  onChange={setPin}
+                  onConfirm={() => handleResolve(pin)}
+                  error={pinError}
+                  loading={resolving}
+                />
+                <Btn
+                  onClick={() => setShowResolveModal(false)}
+                  variant="secundario"
+                  size="normal"
+                >
+                  <X size={20} weight="bold" aria-hidden="true" />
+                  <span>Cancelar</span>
+                </Btn>
+              </div>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </PhoneFrame>
   );
 }

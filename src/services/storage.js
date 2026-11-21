@@ -1,24 +1,24 @@
 export const storage = {
-  get: (k) => {
+  get: (key) => {
     try {
-      const v = sessionStorage.getItem(k);
-      return v ? JSON.parse(v) : null;
+      const value = localStorage.getItem(key);
+      return value ? JSON.parse(value) : null;
     } catch {
       return null;
     }
   },
-  set: (k, v) => {
+  set: (key, value) => {
     try {
-      sessionStorage.setItem(k, JSON.stringify(v));
-    } catch (e) {
-      console.error("Erro ao salvar no sessionStorage:", e);
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // storage quota or private mode
     }
   },
-  remove: (k) => {
+  remove: (key) => {
     try {
-      sessionStorage.removeItem(k);
-    } catch (e) {
-      console.error("Erro ao remover do sessionStorage:", e);
+      localStorage.removeItem(key);
+    } catch {
+      // storage unavailable
     }
   },
 };

@@ -21,7 +21,9 @@ async function request(method, path, body, token) {
   }
 
   if (!res.ok) {
-    throw new Error(data?.error || `Erro na requisição (${res.status})`);
+    const err = new Error(data?.error || `Erro na requisição (${res.status})`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }

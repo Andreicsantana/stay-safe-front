@@ -1,25 +1,52 @@
-import { G } from "../constants/colors";
+import { CheckCircle, HourglassMedium, PersonSimpleRun, Siren } from "@phosphor-icons/react";
+
+const STATUS_MAP = {
+  pending: {
+    label: "Aguardando",
+    classes: "bg-atencao-suave text-atencao border-atencao/30",
+    Icon: HourglassMedium,
+  },
+  notified: {
+    label: "Notificado",
+    classes: "bg-atencao-suave text-atencao border-atencao/30",
+    Icon: HourglassMedium,
+  },
+  acknowledged: {
+    label: "Cuidador a caminho",
+    classes: "bg-cuidado-suave text-cuidado border-cuidado/30",
+    Icon: PersonSimpleRun,
+  },
+  resolved_carer: {
+    label: "Resolvido",
+    classes: "bg-cuidado-suave text-cuidado border-cuidado/30",
+    Icon: CheckCircle,
+  },
+  resolved_dependent: {
+    label: "Encerrado",
+    classes: "bg-cuidado-suave text-cuidado border-cuidado/30",
+    Icon: CheckCircle,
+  },
+  escalated: {
+    label: "Escalonado",
+    classes: "bg-emergencia-suave text-emergencia border-emergencia/30",
+    Icon: Siren,
+  },
+};
 
 export default function StatusBadge({ status }) {
-  const map = {
-    pending: { label: "Aguardando", bg: G.skyBlueLight, color: G.skyBlue },
-    notified: { label: "Notificado", bg: G.skyBlueLight, color: G.skyBlue },
-    acknowledged: { label: "Cuidador a caminho", bg: G.blueLight, color: G.blue },
-    resolved_carer: { label: "Resolvido", bg: G.greenLight, color: G.green },
-    resolved_dependent: { label: "Encerrado", bg: G.greenLight, color: G.green },
-    escalated: { label: "🚨 Autoridades", bg: G.redLight, color: G.red },
+  const entry = STATUS_MAP[status] || {
+    label: status,
+    classes: "bg-superficie-suave text-texto-secundario border-borda",
+    Icon: HourglassMedium,
   };
-  const s = map[status] || { label: status, bg: G.gray100, color: G.gray600 };
+  const { Icon } = entry;
+
   return (
-    <span style={{
-      background: s.bg,
-      color: s.color,
-      borderRadius: "20px",
-      padding: "3px 10px",
-      fontSize: "12px",
-      fontWeight: 600,
-    }}>
-      {s.label}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-[8px] border px-2.5 py-1 text-[14px] font-semibold ${entry.classes}`}
+    >
+      <Icon size={16} weight="bold" aria-hidden="true" />
+      <span>{entry.label}</span>
     </span>
   );
 }

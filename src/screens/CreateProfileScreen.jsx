@@ -1,11 +1,20 @@
 import { useState } from "react";
+import {
+  ArrowLeft,
+  CaretRight,
+  HandHeart,
+  SignOut,
+  UserCircle,
+  UserPlus,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { api } from "../services/api";
-import { G } from "../constants/colors";
-import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
+import Logo from "../components/Logo";
+import Btn from "../components/Btn";
 
 export default function CreateProfileScreen({ user, onCreated, onLogout }) {
-  const [step, setStep] = useState("role"); // "role" | "details"
+  const [step, setStep] = useState("role");
   const [role, setRole] = useState(null);
   const [name, setName] = useState("");
   const [pin, setPin] = useState("");
@@ -18,7 +27,8 @@ export default function CreateProfileScreen({ user, onCreated, onLogout }) {
     setStep("details");
   };
 
-  const handleCreate = async () => {
+  const handleCreate = async (e) => {
+    if (e) e.preventDefault();
     setError("");
 
     if (!name.trim()) return setError("Digite um nome para o perfil.");
@@ -33,8 +43,8 @@ export default function CreateProfileScreen({ user, onCreated, onLogout }) {
 
       const data = await api.post("/auth/create-profile", body);
       onCreated(data.profile);
-    } catch (e) {
-      setError(e.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -43,251 +53,196 @@ export default function CreateProfileScreen({ user, onCreated, onLogout }) {
   const roleOptions = [
     {
       role: "carer",
-      emoji: "🩺",
+      Icon: HandHeart,
       label: "Cuidador",
-      description: "Monitora alertas e responde quando o dependente precisa de ajuda.",
-      bg: G.blueLight,
-      color: G.blue,
+      description: "Recebe alertas em tempo real e confirma que está a caminho.",
+      badgeClasses: "bg-cuidado-suave text-cuidado",
     },
     {
       role: "dependent",
-      emoji: "🙋",
+      Icon: UserCircle,
       label: "Dependente",
-      description: "Emite alertas de emergência para ser atendido pelo cuidador.",
-      bg: G.redLight,
-      color: G.red,
+      description: "Tela simplificada com botão grande de ajuda para o idoso.",
+      badgeClasses: "bg-emergencia-suave text-emergencia",
     },
   ];
 
+  const firstName = user?.name?.split(" ")[0] || "usuário";
+
   return (
-    <PhoneFrame>
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "24px 20px" }}>
-
-        {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "28px" }}>
-          <div>
-            <p style={{ margin: 0, fontSize: "13px", color: G.gray400 }}>Bem-vindo,</p>
-            <p style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: G.gray800 }}>{user.name.split(" ")[0]}!</p>
-          </div>
+    <PhoneFrame bgClass="bg-fundo">
+      <div className="flex flex-1 flex-col px-5 py-6">
+        <header className="mb-6 flex items-center justify-between gap-2">
+          <Logo size="sm" />
           <button
+            type="button"
             onClick={onLogout}
-            style={{
-              background: G.gray100,
-              border: "none",
-              borderRadius: "10px",
-              padding: "8px 12px",
-              fontSize: "12px",
-              color: G.gray600,
-              cursor: "pointer",
-            }}
+            className="inline-flex min-h-[48px] items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
           >
-            Sair
+            <SignOut size={18} weight="bold" aria-hidden="true" />
+            <span>Sair</span>
           </button>
-        </div>
+        </header>
 
-        {step === "role" && (
-          <>
-            <div style={{ textAlign: "center", marginBottom: "28px" }}>
-              <div style={{ fontSize: "40px", marginBottom: "10px" }}>👤</div>
-              <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 700, color: G.gray800 }}>
-                Criar primeiro perfil
-              </h2>
-              <p style={{ margin: "6px 0 0", color: G.gray400, fontSize: "14px" }}>
-                Qual é o tipo de perfil que você deseja criar?
-              </p>
+        <p className="mt-0 mb-2 text-[15px] font-semibold text-cuidado">
+          {step === "role" ? "Passo 1 de 2" : "Passo 2 de 2"}
+        </p>
+
+        {step === "role" ? (
+          <div>
+            <h1 className="mt-0 mb-1 font-display text-[26px] font-bold text-texto">
+              Criar perfil para {firstName}
+            </h1>
+            <p className="mt-0 mb-6 text-[18px] text-texto-secundario">
+              Escolha quem vai usar este perfil:
+            </p>
+
+            <div className="flex flex-col gap-3">
+              {roleOptions.map((opt) => {
+                const { Icon } = opt;
+                return (
+                  <button
+                    key={opt.role}
+                    type="button"
+                    onClick={() => handleSelectRole(opt.role)}
+                    className="flex min-h-[88px] w-full items-center gap-4 rounded-[10px] border border-borda bg-superficie p-4 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                  >
+                    <div
+                      className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-[10px] ${opt.badgeClasses}`}
+                    >
+                      <Icon size={32} weight="bold" aria-hidden="true" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="m-0 text-[20px] font-bold text-texto">{opt.label}</p>
+                      <p className="mt-1 mb-0 text-[16px] leading-snug text-texto-secundario">
+                        {opt.description}
+                      </p>
+                    </div>
+                    <CaretRight size={24} weight="bold" className="shrink-0 text-texto-suave" aria-hidden="true" />
+                  </button>
+                );
+              })}
             </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              {roleOptions.map(opt => (
-                <button
-                  key={opt.role}
-                  onClick={() => handleSelectRole(opt.role)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "16px",
-                    padding: "18px 16px",
-                    background: G.white,
-                    border: `1.5px solid ${G.gray200}`,
-                    borderRadius: "18px",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "border-color 0.15s",
-                  }}
-                >
-                  <div style={{
-                    width: "56px",
-                    height: "56px",
-                    borderRadius: "50%",
-                    background: opt.bg,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "26px",
-                    flexShrink: 0,
-                  }}>
-                    {opt.emoji}
-                  </div>
-                  <div>
-                    <p style={{ margin: 0, fontWeight: 700, fontSize: "16px", color: G.gray800 }}>{opt.label}</p>
-                    <p style={{ margin: "3px 0 0", fontSize: "13px", color: G.gray400, lineHeight: 1.4 }}>
-                      {opt.description}
-                    </p>
-                  </div>
-                  <span style={{ marginLeft: "auto", color: G.gray400, fontSize: "18px" }}>›</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {step === "details" && (
-          <>
+          </div>
+        ) : (
+          <form onSubmit={handleCreate} className="flex flex-1 flex-col">
             <button
-              onClick={() => { setStep("role"); setError(""); }}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: G.blue,
-                fontSize: "14px",
-                cursor: "pointer",
-                padding: 0,
-                marginBottom: "20px",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
+              type="button"
+              onClick={() => {
+                setStep("role");
+                setError("");
               }}
+              className="mb-4 inline-flex min-h-[48px] w-fit items-center gap-2 rounded-[8px] border border-borda bg-superficie px-3.5 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
             >
-              ← Voltar
+              <ArrowLeft size={20} weight="bold" aria-hidden="true" />
+              <span>Voltar</span>
             </button>
 
-            <div style={{ textAlign: "center", marginBottom: "24px" }}>
-              <div style={{
-                width: "64px",
-                height: "64px",
-                borderRadius: "50%",
-                background: role === "carer" ? G.blueLight : G.redLight,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "30px",
-                margin: "0 auto 12px",
-              }}>
-                {role === "carer" ? "🩺" : "🙋"}
-              </div>
-              <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: G.gray800 }}>
-                Perfil de {role === "carer" ? "Cuidador" : "Dependente"}
-              </h2>
-              <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray400 }}>
-                Preencha as informações do perfil
-              </p>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              <div>
-                <label style={{ fontSize: "13px", color: G.gray600, fontWeight: 500, display: "block", marginBottom: "6px" }}>
-                  Nome do perfil
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder={role === "carer" ? "Ex: Maria (Cuidadora)" : "Ex: João (Dependente)"}
-                  style={{
-                    width: "100%",
-                    padding: "13px 14px",
-                    border: `1.5px solid ${G.gray200}`,
-                    borderRadius: "12px",
-                    fontSize: "15px",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                />
+            <div className="rounded-[10px] border border-borda bg-superficie p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <div
+                  className={`flex h-12 w-12 items-center justify-center rounded-[10px] ${
+                    role === "carer"
+                      ? "bg-cuidado-suave text-cuidado"
+                      : "bg-emergencia-suave text-emergencia"
+                  }`}
+                >
+                  {role === "carer" ? (
+                    <HandHeart size={28} weight="bold" aria-hidden="true" />
+                  ) : (
+                    <UserCircle size={28} weight="bold" aria-hidden="true" />
+                  )}
+                </div>
+                <div>
+                  <h1 className="m-0 font-display text-[22px] font-bold text-texto">
+                    Perfil de {role === "carer" ? "Cuidador" : "Dependente"}
+                  </h1>
+                  <p className="m-0 text-[15px] text-texto-secundario">
+                    Preencha as informações abaixo
+                  </p>
+                </div>
               </div>
 
-              {role === "dependent" && (
-                <>
-                  <div>
-                    <label style={{ fontSize: "13px", color: G.gray600, fontWeight: 500, display: "block", marginBottom: "6px" }}>
-                      PIN de segurança <span style={{ color: G.gray400, fontWeight: 400 }}>(opcional)</span>
-                    </label>
-                    <p style={{ fontSize: "12px", color: G.gray400, margin: "0 0 8px" }}>
-                      Usado para encerrar alertas pelo dependente
-                    </p>
-                    <input
-                      type="password"
-                      inputMode="numeric"
-                      maxLength={10}
-                      value={pin}
-                      onChange={e => setPin(e.target.value)}
-                      placeholder="Deixe vazio para não usar PIN"
-                      style={{
-                        width: "100%",
-                        padding: "13px 14px",
-                        border: `1.5px solid ${G.gray200}`,
-                        borderRadius: "12px",
-                        fontSize: "15px",
-                        outline: "none",
-                        boxSizing: "border-box",
-                        letterSpacing: pin ? "6px" : "0",
-                      }}
-                    />
-                  </div>
-                  {pin && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <label htmlFor="create-prof-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                    Nome do perfil
+                  </label>
+                  <input
+                    id="create-prof-name"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={role === "carer" ? "Ex: Maria (Cuidadora)" : "Ex: João (Dependente)"}
+                    className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                  />
+                </div>
+
+                {role === "dependent" && (
+                  <>
                     <div>
-                      <label style={{ fontSize: "13px", color: G.gray600, fontWeight: 500, display: "block", marginBottom: "6px" }}>
-                        Confirmar PIN
+                      <label htmlFor="create-prof-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                        PIN de segurança (opcional)
                       </label>
                       <input
+                        id="create-prof-pin"
                         type="password"
                         inputMode="numeric"
-                        maxLength={10}
-                        value={confirmPin}
-                        onChange={e => setConfirmPin(e.target.value)}
-                        placeholder="Repita o PIN"
-                        style={{
-                          width: "100%",
-                          padding: "13px 14px",
-                          border: `1.5px solid ${confirmPin && confirmPin !== pin ? G.red : G.gray200}`,
-                          borderRadius: "12px",
-                          fontSize: "15px",
-                          outline: "none",
-                          boxSizing: "border-box",
-                          letterSpacing: confirmPin ? "6px" : "0",
-                        }}
+                        maxLength={6}
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value)}
+                        placeholder="Ex: 1234"
+                        className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
                       />
-                      {confirmPin && confirmPin !== pin && (
-                        <p style={{ color: G.red, fontSize: "12px", margin: "4px 0 0" }}>PINs não coincidem</p>
-                      )}
+                      <p className="mt-1 mb-0 text-[14px] text-texto-secundario">
+                        Se definido, o dependente precisará digitar este PIN para encerrar um alerta.
+                      </p>
                     </div>
-                  )}
-                </>
-              )}
-            </div>
 
-            {error && (
-              <div style={{
-                background: G.redLight,
-                color: G.red,
-                padding: "10px 14px",
-                borderRadius: "10px",
-                marginTop: "16px",
-                fontSize: "14px",
-              }}>
-                {error}
+                    {pin && (
+                      <div>
+                        <label htmlFor="create-prof-confirm-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                          Confirmar PIN
+                        </label>
+                        <input
+                          id="create-prof-confirm-pin"
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={confirmPin}
+                          onChange={(e) => setConfirmPin(e.target.value)}
+                          placeholder="Repita o PIN"
+                          className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                        />
+                        {confirmPin && confirmPin !== pin && (
+                          <p className="mt-1 mb-0 text-[15px] font-semibold text-emergencia">
+                            Os PINs não coincidem.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {error && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2.5 rounded-[8px] border border-emergencia bg-emergencia-suave p-3 text-[16px] font-semibold text-emergencia"
+                  >
+                    <WarningCircle size={20} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <Btn type="submit" disabled={loading} variant="primario" size="normal">
+                    <UserPlus size={20} weight="bold" aria-hidden="true" />
+                    <span>{loading ? "Criando perfil…" : "Criar perfil"}</span>
+                  </Btn>
+                </div>
               </div>
-            )}
-
-            <div style={{ marginTop: "auto", paddingTop: "24px" }}>
-              <Btn
-                onClick={handleCreate}
-                disabled={loading}
-                color={role === "carer" ? G.blue : G.red}
-              >
-                {loading ? "Criando perfil..." : "Criar perfil"}
-              </Btn>
             </div>
-          </>
+          </form>
         )}
       </div>
     </PhoneFrame>

@@ -1,78 +1,103 @@
 import { useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  Check,
+  Copy,
+  DeviceMobile,
+  HandHeart,
+  PencilSimple,
+  Plus,
+  SignOut,
+  Trash,
+  UserCircle,
+  UserPlus,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { api } from "../services/api";
-import { G } from "../constants/colors";
-import Btn from "../components/Btn";
 import PhoneFrame from "../components/PhoneFrame";
+import Logo from "../components/Logo";
+import Btn from "../components/Btn";
 import ConfirmModal from "../components/ConfirmModal";
 
-const WEB_DEMO_TOKEN = `web-demo-${Math.random().toString(36).slice(2)}`;
+const WEB_DEVICE_TOKEN_KEY = "staysafe_device_token";
 
-export default function ProfileSelectScreen({ user, profiles: initialProfiles, onSelect, onCreateProfile }) {
+function getDeviceToken() {
+  try {
+    let token = localStorage.getItem(WEB_DEVICE_TOKEN_KEY);
+    if (!token) {
+      token = `web-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+      localStorage.setItem(WEB_DEVICE_TOKEN_KEY, token);
+    }
+    return token;
+  } catch {
+    return `web-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+export default function ProfileSelectScreen({
+  user,
+  profiles: initialProfiles,
+  onSelect,
+  onCreateProfile,
+  onLogout,
+}) {
   const [profiles, setProfiles] = useState(initialProfiles);
-  const [loading, setLoading] = useState(null);
+  const [loadingId, setLoadingId] = useState(null);
   const [error, setError] = useState("");
 
-  // Edit/delete modal state
-  const [modal, setModal] = useState(null); // null | { mode: "edit"|"delete", profile }
+  const [editModal, setEditModal] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [editName, setEditName] = useState("");
   const [editPin, setEditPin] = useState("");
   const [editConfirmPin, setEditConfirmPin] = useState("");
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState("");
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   const handleSelect = async (profile) => {
-    setLoading(profile.id);
+    setLoadingId(profile.id);
     setError("");
     try {
       const data = await api.post("/auth/select-profile", {
         userId: user.id,
         profileId: profile.id,
-        deviceToken: WEB_DEMO_TOKEN,
+        deviceToken: getDeviceToken(),
         platform: "web",
       });
       onSelect(profile, data);
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(null);
+      setLoadingId(null);
     }
   };
 
-  const openEdit = (profile, e) => {
-    e.stopPropagation();
+  const openEdit = (profile) => {
     setEditName(profile.name);
     setEditPin("");
     setEditConfirmPin("");
     setModalError("");
-    setModal({ mode: "edit", profile });
-  };
-
-  const openDelete = (profile, e) => {
-    e.stopPropagation();
-    setModalError("");
-    setModal({ mode: "delete", profile });
-  };
-
-  const closeModal = () => {
-    setModal(null);
-    setModalError("");
-    setConfirmLogout(false);
+    setCopiedId(false);
+    setEditModal(profile);
   };
 
   const handleEdit = async () => {
-    if (!editName.trim()) return setModalError("Nome não pode ficar vazio.");
+    if (!editName.trim()) return setModalError("O nome não pode ficar vazio.");
     if (editPin && editPin !== editConfirmPin) return setModalError("Os PINs não coincidem.");
 
     setModalLoading(true);
     setModalError("");
     try {
-      const body = { userId: user.id, profileId: modal.profile.id, name: editName };
-      if (editPin !== undefined) body.pin = editPin || undefined;
+      const body = { userId: user.id, profileId: editModal.id, name: editName.trim() };
+      if (editPin) body.pin = editPin;
 
       const data = await api.patch("/auth/update-profile", body);
-      setProfiles(prev => prev.map(p => p.id === data.profile.id ? { ...p, ...data.profile } : p));
-      closeModal();
+      setProfiles((prev) =>
+        prev.map((p) => (p.id === data.profile.id ? { ...p, ...data.profile } : p))
+      );
+      setEditModal(null);
     } catch (e) {
       setModalError(e.message);
     } finally {
@@ -81,14 +106,19 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
   };
 
   const handleDelete = async () => {
+    if (!deleteTarget) return;
     setModalLoading(true);
-    setModalError("");
+    setError("");
     try {
-      await api.delete("/auth/delete-profile", { userId: user.id, profileId: modal.profile.id });
-      setProfiles(prev => prev.filter(p => p.id !== modal.profile.id));
-      closeModal();
+      await api.delete("/auth/delete-profile", {
+        userId: user.id,
+        profileId: deleteTarget.id,
+      });
+      setProfiles((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+      setDeleteTarget(null);
     } catch (e) {
-      setModalError(e.message);
+      setError(e.message);
+      setDeleteTarget(null);
     } finally {
       setModalLoading(false);
     }
@@ -96,12 +126,12 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
 
   const handleConfirmForceLogout = async () => {
     setConfirmLogout(false);
+    if (!editModal) return;
     setModalLoading(true);
     setModalError("");
     try {
-      await api.post("/auth/force-logout", { userId: user.id, profileId: modal.profile.id });
-      setModalError("Desconectado com sucesso.");
-      setTimeout(closeModal, 1500);
+      await api.post("/auth/force-logout", { userId: user.id, profileId: editModal.id });
+      setEditModal(null);
     } catch (e) {
       setModalError(e.message);
     } finally {
@@ -109,311 +139,341 @@ export default function ProfileSelectScreen({ user, profiles: initialProfiles, o
     }
   };
 
-  const carers = profiles.filter(p => p.role === "carer");
-  const dependents = profiles.filter(p => p.role === "dependent");
-
-  const inputStyle = {
-    width: "100%",
-    padding: "12px 14px",
-    border: `1.5px solid ${G.gray200}`,
-    borderRadius: "12px",
-    fontSize: "15px",
-    outline: "none",
-    boxSizing: "border-box",
+  const handleCopyId = async () => {
+    if (!editModal?.id) return;
+    try {
+      await navigator.clipboard.writeText(editModal.id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    } catch {
+      // clipboard unavailable
+    }
   };
 
-  const labelStyle = {
-    fontSize: "13px",
-    color: G.gray600,
-    fontWeight: 500,
-    display: "block",
-    marginBottom: "6px",
-  };
+  const carers = profiles.filter((p) => p.role === "carer");
+  const dependents = profiles.filter((p) => p.role === "dependent");
+  const firstName = user?.name?.split(" ")[0] || "usuário";
 
-  const renderProfileCard = (p, roleColor, emoji) => (
-    <div
-      key={p.id}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "14px",
-        padding: "14px 16px",
-        background: G.white,
-        border: `1.5px solid ${G.gray200}`,
-        borderRadius: "16px",
-        position: "relative",
-      }}
-    >
-      {/* Avatar */}
-      <div style={{
-        width: "48px", height: "48px", borderRadius: "50%",
-        background: roleColor === G.blue ? G.blueLight : G.redLight,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: "22px", flexShrink: 0,
-      }}>
-        {emoji}
-      </div>
+  const renderProfileCard = (profile) => {
+    const isCarer = profile.role === "carer";
+    const Icon = isCarer ? HandHeart : UserCircle;
 
-      {/* Info — clickable to select */}
+    return (
       <div
-        onClick={() => !loading && handleSelect(p)}
-        style={{ flex: 1, textAlign: "left", cursor: "pointer" }}
+        key={profile.id}
+        className="rounded-[10px] border border-borda bg-superficie p-4"
       >
-        <p style={{ margin: 0, fontWeight: 600, color: G.gray800, fontSize: "15px" }}>{p.name}</p>
-        <p style={{ margin: 0, color: roleColor, fontSize: "12px", fontWeight: 500 }}>
-          {p.role === "carer" ? "Cuidador" : "Dependente"}
-        </p>
-      </div>
-
-      {loading === p.id && (
-        <span style={{ color: G.gray400, fontSize: "13px" }}>...</span>
-      )}
-
-      {/* Action buttons */}
-      {!loading && (
-        <div style={{ display: "flex", gap: "6px" }}>
-          <button
-            onClick={(e) => openEdit(p, e)}
-            title="Editar perfil"
-            style={{
-              background: G.gray100, border: "none", borderRadius: "8px",
-              padding: "6px 9px", cursor: "pointer", fontSize: "14px",
-              color: G.gray600,
-            }}
+        <button
+          type="button"
+          onClick={() => handleSelect(profile)}
+          disabled={loadingId !== null}
+          className="flex min-h-[64px] w-full items-center gap-3.5 rounded-[8px] text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado disabled:opacity-60"
+        >
+          <div
+            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] ${
+              isCarer
+                ? "bg-cuidado-suave text-cuidado"
+                : "bg-emergencia-suave text-emergencia"
+            }`}
           >
-            ✏️
+            <Icon size={28} weight="bold" aria-hidden="true" />
+          </div>
+          <div className="flex-1">
+            <p className="m-0 text-[20px] font-bold text-texto">{profile.name}</p>
+            <p
+              className={`m-0 text-[16px] font-semibold ${
+                isCarer ? "text-cuidado" : "text-emergencia"
+              }`}
+            >
+              {loadingId === profile.id
+                ? "Entrando…"
+                : isCarer
+                  ? "Cuidador — tocar para abrir"
+                  : "Dependente — tocar para abrir"}
+            </p>
+          </div>
+        </button>
+
+        <div className="mt-3 flex gap-2 border-t border-borda pt-3">
+          <button
+            type="button"
+            onClick={() => openEdit(profile)}
+            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-borda bg-fundo px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+          >
+            <PencilSimple size={18} weight="bold" aria-hidden="true" />
+            <span>Editar</span>
           </button>
           <button
-            onClick={(e) => openDelete(p, e)}
-            title="Apagar perfil"
-            style={{
-              background: G.redLight, border: "none", borderRadius: "8px",
-              padding: "6px 9px", cursor: "pointer", fontSize: "14px",
-            }}
+            type="button"
+            onClick={() => setDeleteTarget(profile)}
+            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-emergencia/40 bg-emergencia-suave px-3 text-[16px] font-semibold text-emergencia focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-emergencia"
           >
-            🗑️
+            <Trash size={18} weight="bold" aria-hidden="true" />
+            <span>Apagar</span>
           </button>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   return (
-    <PhoneFrame>
-      <div style={{ flex: 1, padding: "24px 20px", overflowY: "auto" }}>
-        <div style={{ textAlign: "center", marginBottom: "28px" }}>
-          <div style={{ fontSize: "32px", marginBottom: "8px" }}>👋</div>
-          <h2 style={{ margin: 0, color: G.gray800, fontSize: "22px" }}>Olá, {user.name.split(" ")[0]}!</h2>
-          <p style={{ color: G.gray400, margin: "4px 0 0", fontSize: "14px" }}>
-            Selecione ou gerencie seus perfis
+    <PhoneFrame bgClass="bg-fundo">
+      <div className="flex flex-1 flex-col px-5 py-6">
+        <header className="mb-6 flex items-center justify-between gap-2">
+          <Logo size="sm" />
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="inline-flex min-h-[48px] items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+            >
+              <SignOut size={18} weight="bold" aria-hidden="true" />
+              <span>Sair</span>
+            </button>
+          )}
+        </header>
+
+        <div className="mb-6">
+          <h1 className="m-0 font-display text-[28px] font-bold text-texto">
+            Olá, {firstName}
+          </h1>
+          <p className="mt-1 mb-0 text-[18px] text-texto-secundario">
+            Selecione quem vai usar este aparelho.
           </p>
         </div>
 
-        {carers.length > 0 && (
-          <div style={{ marginBottom: "20px" }}>
-            <p style={{ fontSize: "11px", fontWeight: 600, color: G.gray400, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "10px" }}>
-              Perfis de Cuidador
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {carers.map(p => renderProfileCard(p, G.blue, "🩺"))}
-            </div>
+        {error && (
+          <div
+            role="alert"
+            className="mb-4 flex items-start gap-2.5 rounded-[8px] border border-emergencia bg-emergencia-suave p-3 text-[16px] font-semibold text-emergencia"
+          >
+            <WarningCircle size={20} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
           </div>
+        )}
+
+        {carers.length > 0 && (
+          <section className="mb-5">
+            <h2 className="mt-0 mb-2.5 font-display text-[18px] font-bold text-texto">
+              Perfis de Cuidador
+            </h2>
+            <div className="flex flex-col gap-3">{carers.map(renderProfileCard)}</div>
+          </section>
         )}
 
         {dependents.length > 0 && (
-          <div style={{ marginBottom: "20px" }}>
-            <p style={{ fontSize: "11px", fontWeight: 600, color: G.gray400, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "10px" }}>
+          <section className="mb-5">
+            <h2 className="mt-0 mb-2.5 font-display text-[18px] font-bold text-texto">
               Perfis de Dependente
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {dependents.map(p => renderProfileCard(p, G.red, "🙋"))}
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div style={{ background: G.redLight, color: G.red, padding: "10px 14px", borderRadius: "10px", marginBottom: "12px", fontSize: "14px" }}>
-            {error}
-          </div>
+            </h2>
+            <div className="flex flex-col gap-3">{dependents.map(renderProfileCard)}</div>
+          </section>
         )}
 
         {profiles.length === 0 && (
-          <div style={{ textAlign: "center", padding: "32px 20px", background: G.gray50, borderRadius: "16px", marginBottom: "16px" }}>
-            <div style={{ fontSize: "40px", marginBottom: "8px" }}>👤</div>
-            <p style={{ margin: 0, fontWeight: 600, color: G.gray800, fontSize: "15px" }}>Nenhum perfil criado</p>
-            <p style={{ margin: "4px 0 0", fontSize: "13px", color: G.gray400 }}>Crie seu primeiro perfil para continuar</p>
+          <div className="mb-5 flex flex-col items-center rounded-[10px] border border-borda bg-superficie px-5 py-8 text-center">
+            <UserPlus size={44} weight="bold" className="mb-3 text-cuidado" aria-hidden="true" />
+            <p className="m-0 text-[18px] font-bold text-texto">Nenhum perfil criado</p>
+            <p className="mt-1 mb-0 text-[16px] text-texto-secundario">
+              Crie o primeiro perfil para começar.
+            </p>
           </div>
         )}
 
-        <button
-          onClick={onCreateProfile}
-          style={{
-            display: "flex", alignItems: "center", gap: "12px",
-            padding: "14px 16px", background: "transparent",
-            border: `1.5px dashed ${G.blue}`, borderRadius: "16px",
-            cursor: "pointer", width: "100%", marginTop: "4px",
-          }}
-        >
-          <div style={{
-            width: "40px", height: "40px", borderRadius: "50%",
-            background: G.blueLight, display: "flex", alignItems: "center",
-            justifyContent: "center", fontSize: "20px", flexShrink: 0,
-          }}>
-            ＋
-          </div>
-          <p style={{ margin: 0, fontWeight: 600, color: G.blue, fontSize: "14px" }}>Adicionar novo perfil</p>
-        </button>
+        <div className="mt-auto flex flex-col gap-3 pt-2">
+          <Btn onClick={onCreateProfile} variant="secundario" size="normal">
+            <Plus size={20} weight="bold" aria-hidden="true" />
+            <span>Adicionar novo perfil</span>
+          </Btn>
+
+          <button
+            type="button"
+            onClick={() => setShowInstallGuide(true)}
+            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[8px] px-3 text-[16px] font-semibold text-cuidado underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+          >
+            <DeviceMobile size={20} weight="bold" aria-hidden="true" />
+            <span>Como instalar no celular do dependente</span>
+          </button>
+        </div>
       </div>
 
-      {/* ─── Modal overlay ─── */}
-      {modal && (
-        <div
-          onClick={closeModal}
-          style={{
-            position: "absolute", inset: 0, background: "rgba(0,0,0,0.45)",
-            display: "flex", alignItems: "flex-end", borderRadius: "inherit",
-            zIndex: 50,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              width: "100%", background: G.white,
-              borderRadius: "24px 24px 0 0",
-              padding: "24px 20px 32px",
-              boxShadow: "0 -4px 32px rgba(0,0,0,0.12)",
-            }}
-          >
-            {/* Drag handle */}
-            <div style={{ width: "40px", height: "4px", background: G.gray200, borderRadius: "4px", margin: "0 auto 20px" }} />
+      <Dialog.Root open={Boolean(editModal)} onOpenChange={(open) => { if (!open) setEditModal(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
+          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[90dvh] w-full max-w-[480px] overflow-y-auto rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 focus-visible:outline-none">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
+            <Dialog.Title className="m-0 font-display text-[22px] font-bold text-texto">
+              Editar perfil
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 mb-4 text-[16px] text-texto-secundario">
+              Atualize os dados do perfil selecionado.
+            </Dialog.Description>
 
-            {modal.mode === "edit" && (
-              <>
-                <h3 style={{ margin: "0 0 20px", fontSize: "18px", fontWeight: 700, color: G.gray800 }}>
-                  Editar perfil
-                </h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div className="flex flex-col gap-4">
+              <div>
+                <label htmlFor="select-edit-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                  Nome do perfil
+                </label>
+                <input
+                  id="select-edit-name"
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                />
+              </div>
+
+              {editModal?.role === "dependent" && (
+                <>
                   <div>
-                    <label style={labelStyle}>Nome do perfil</label>
+                    <label htmlFor="select-edit-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                      Novo PIN (deixe vazio para não alterar)
+                    </label>
                     <input
-                      type="text"
-                      value={editName}
-                      onChange={e => setEditName(e.target.value)}
-                      style={inputStyle}
+                      id="select-edit-pin"
+                      type="password"
+                      inputMode="numeric"
+                      value={editPin}
+                      onChange={(e) => setEditPin(e.target.value)}
+                      placeholder="Novo PIN"
+                      className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
                     />
                   </div>
-                  {modal.profile.role === "dependent" && (
-                    <>
-                      <div>
-                        <label style={labelStyle}>
-                          Novo PIN <span style={{ color: G.gray400, fontWeight: 400 }}>(deixe vazio para não alterar)</span>
-                        </label>
-                        <input
-                          type="password"
-                          inputMode="numeric"
-                          value={editPin}
-                          onChange={e => setEditPin(e.target.value)}
-                          placeholder="Novo PIN"
-                          style={{ ...inputStyle, letterSpacing: editPin ? "6px" : "0" }}
-                        />
-                      </div>
-                      {editPin && (
-                        <div>
-                          <label style={labelStyle}>Confirmar PIN</label>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            value={editConfirmPin}
-                            onChange={e => setEditConfirmPin(e.target.value)}
-                            placeholder="Repita o PIN"
-                            style={{
-                              ...inputStyle,
-                              borderColor: editConfirmPin && editConfirmPin !== editPin ? G.red : G.gray200,
-                              letterSpacing: editConfirmPin ? "6px" : "0",
-                            }}
-                          />
-                          {editConfirmPin && editConfirmPin !== editPin && (
-                            <p style={{ color: G.red, fontSize: "12px", margin: "4px 0 0" }}>PINs não coincidem</p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {modal.profile.role === "dependent" && (
-                    <div style={{ marginTop: "10px", padding: "14px", background: G.redLight, borderRadius: "12px", border: `1px solid ${G.red}` }}>
-                      <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: 600, color: G.redDark }}>Desconectar Dispositivo</p>
-                      <p style={{ margin: "0 0 12px", fontSize: "12px", color: G.redDark }}>Força a saída do dependente em todos os celulares conectados.</p>
-                      <button
-                        onClick={() => setConfirmLogout(true)}
-                        disabled={modalLoading}
-                        style={{
-                          background: G.red, color: G.white, border: "none", borderRadius: "8px",
-                          padding: "8px 12px", fontSize: "13px", fontWeight: 600, cursor: "pointer",
-                          width: "100%"
-                        }}
-                      >
-                        Desconectar dependente
-                      </button>
+
+                  {editPin && (
+                    <div>
+                      <label htmlFor="select-edit-confirm-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                        Confirmar PIN
+                      </label>
+                      <input
+                        id="select-edit-confirm-pin"
+                        type="password"
+                        inputMode="numeric"
+                        value={editConfirmPin}
+                        onChange={(e) => setEditConfirmPin(e.target.value)}
+                        placeholder="Repita o PIN"
+                        className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                      />
                     </div>
                   )}
-                </div>
 
-                {modalError && (
-                  <div style={{ background: modalError.includes("sucesso") ? G.greenLight : G.redLight, color: modalError.includes("sucesso") ? G.green : G.red, padding: "10px 14px", borderRadius: "10px", marginTop: "14px", fontSize: "13px" }}>
-                    {modalError}
+                  <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
+                    <p className="mt-0 mb-1 text-[14px] font-semibold text-texto-secundario">
+                      ID do perfil
+                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <code className="break-all text-[14px] text-texto">{editModal.id}</code>
+                      <button
+                        type="button"
+                        onClick={handleCopyId}
+                        className="inline-flex min-h-[48px] shrink-0 items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[15px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                      >
+                        {copiedId ? (
+                          <>
+                            <Check size={18} weight="bold" className="text-cuidado" aria-hidden="true" />
+                            <span>Copiado</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={18} weight="bold" aria-hidden="true" />
+                            <span>Copiar</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
-                )}
 
-                <div style={{ marginTop: "20px" }}>
-                  <Btn onClick={handleEdit} disabled={modalLoading} color={G.blue}>
-                    {modalLoading ? "Salvando..." : "Salvar alterações"}
-                  </Btn>
-                  <button onClick={closeModal} style={{ marginTop: "12px", background: "transparent", border: "none", color: G.gray600, fontSize: "14px", cursor: "pointer", width: "100%", padding: "8px" }}>
-                    Cancelar
-                  </button>
-                </div>
-              </>
-            )}
-
-            {modal.mode === "delete" && (
-              <>
-                <div style={{ textAlign: "center", marginBottom: "20px" }}>
-                  <div style={{ fontSize: "40px", marginBottom: "10px" }}>⚠️</div>
-                  <h3 style={{ margin: "0 0 6px", fontSize: "18px", fontWeight: 700, color: G.gray800 }}>
-                    Apagar perfil?
-                  </h3>
-                  <p style={{ margin: 0, color: G.gray400, fontSize: "14px" }}>
-                    O perfil <strong style={{ color: G.gray800 }}>{modal.profile.name}</strong> será apagado permanentemente. Esta ação não pode ser desfeita.
-                  </p>
-                </div>
-
-                {modalError && (
-                  <div style={{ background: G.redLight, color: G.red, padding: "10px 14px", borderRadius: "10px", marginBottom: "14px", fontSize: "13px" }}>
-                    {modalError}
+                  <div className="rounded-[8px] border border-emergencia/40 bg-emergencia-suave p-3.5">
+                    <p className="mt-0 mb-1 text-[16px] font-bold text-emergencia">
+                      Desconectar dispositivo
+                    </p>
+                    <p className="mt-0 mb-3 text-[15px] text-texto">
+                      Força a saída do dependente em todos os celulares conectados.
+                    </p>
+                    <Btn
+                      onClick={() => setConfirmLogout(true)}
+                      variant="perigo"
+                      size="normal"
+                      disabled={modalLoading}
+                    >
+                      <SignOut size={18} weight="bold" aria-hidden="true" />
+                      <span>Desconectar dependente</span>
+                    </Btn>
                   </div>
-                )}
+                </>
+              )}
 
-                <Btn onClick={handleDelete} disabled={modalLoading} color={G.red}>
-                  {modalLoading ? "Apagando..." : "Apagar perfil"}
+              {modalError && (
+                <p role="alert" className="m-0 text-[16px] font-semibold text-emergencia">
+                  {modalError}
+                </p>
+              )}
+
+              <div className="flex flex-col gap-2.5 pt-2">
+                <Btn onClick={handleEdit} variant="primario" size="normal" disabled={modalLoading}>
+                  {modalLoading ? "Salvando…" : "Salvar alterações"}
                 </Btn>
-                <button onClick={closeModal} style={{ marginTop: "12px", background: "transparent", border: "none", color: G.gray600, fontSize: "14px", cursor: "pointer", width: "100%", padding: "8px" }}>
+                <Btn onClick={() => setEditModal(null)} variant="secundario" size="normal">
                   Cancelar
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+                </Btn>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={showInstallGuide} onOpenChange={setShowInstallGuide}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
+          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[480px] rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 focus-visible:outline-none">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
+            <Dialog.Title className="m-0 font-display text-[22px] font-bold text-texto">
+              Adicionar à tela inicial
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 mb-4 text-[16px] text-texto-secundario">
+              Instale o Stay Safe como aplicativo no celular do dependente para acesso rápido com um toque.
+            </Dialog.Description>
+            <div className="mb-5 flex flex-col gap-3 text-[16px] text-texto">
+              <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
+                <p className="mt-0 mb-1 font-bold">Android (Chrome)</p>
+                <p className="m-0 text-texto-secundario">
+                  Toque no menu (três pontos no canto superior) e escolha "Adicionar à tela inicial" ou "Instalar aplicativo".
+                </p>
+              </div>
+              <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
+                <p className="mt-0 mb-1 font-bold">iPhone (Safari)</p>
+                <p className="m-0 text-texto-secundario">
+                  Toque no botão Compartilhar (quadrado com seta para cima) e escolha "Adicionar à Tela de Início".
+                </p>
+              </div>
+            </div>
+            <Btn onClick={() => setShowInstallGuide(false)} variant="primario" size="normal">
+              Entendi
+            </Btn>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <ConfirmModal
+        isOpen={Boolean(deleteTarget)}
+        title="Apagar perfil?"
+        message={`O perfil ${deleteTarget?.name || ""} será apagado permanentemente.`}
+        confirmText="Apagar perfil"
+        cancelText="Cancelar"
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+        isDestructive
+      />
 
       <ConfirmModal
         isOpen={confirmLogout}
-        title="Desconectar Dependente?"
-        message="Isso desconectará o dependente de todos os dispositivos conectados. Tem certeza que deseja continuar?"
+        title="Desconectar dependente?"
+        message="Isso desconectará o dependente de todos os dispositivos conectados."
         confirmText="Sim, desconectar"
         cancelText="Cancelar"
         onConfirm={handleConfirmForceLogout}
         onCancel={() => setConfirmLogout(false)}
-        isDestructive={true}
+        isDestructive
       />
     </PhoneFrame>
   );

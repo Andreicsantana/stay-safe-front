@@ -1,18 +1,22 @@
 import { useState } from "react";
+import { ArrowLeft, Eye, EyeSlash, UserPlus, WarningCircle } from "@phosphor-icons/react";
 import { api } from "../services/api";
-import { G } from "../constants/colors";
+import PhoneFrame from "../components/PhoneFrame";
+import Logo from "../components/Logo";
 import Btn from "../components/Btn";
 
 export default function RegisterScreen({ onSuccess, onBack }) {
-  const [name, setName]           = useState("");
-  const [email, setEmail]         = useState("");
-  const [phone, setPhone]         = useState("");
-  const [password, setPassword]   = useState("");
-  const [confirm, setConfirm]     = useState("");
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleRegister = async () => {
+  const handleRegister = async (e) => {
+    if (e) e.preventDefault();
     setError("");
 
     if (!name.trim() || !email.trim() || !phone.trim() || !password) {
@@ -29,121 +33,153 @@ export default function RegisterScreen({ onSuccess, onBack }) {
     try {
       await api.post("/users/register", { name, email, phone, password });
       onSuccess();
-    } catch (e) {
-      setError(e.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const inputStyle = {
-    width: "100%",
-    padding: "13px 14px",
-    border: `1.5px solid ${G.gray200}`,
-    borderRadius: "12px",
-    fontSize: "15px",
-    background: G.bgInput,
-    outline: "none",
-    boxSizing: "border-box",
-    color: G.textPrimary,
-  };
-
-  const labelStyle = {
-    fontSize: "13px",
-    color: G.gray600,
-    fontWeight: 500,
-    display: "block",
-    marginBottom: "6px",
-  };
-
-  const field = (label, input, hint) => (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      {input}
-      {hint && <p style={{ fontSize: "11px", color: G.gray400, margin: "4px 0 0" }}>{hint}</p>}
-    </div>
-  );
-
   return (
-    <div className="login-page-wrapper">
-      <div className="login-card">
-        {/* Header */}
-        <div style={{ textAlign: "center", marginBottom: "28px" }}>
-          <div style={{
-            width: "72px", height: "72px", background: G.blue,
-            borderRadius: "50%", margin: "0 auto 14px",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "32px", boxShadow: "0 8px 16px rgba(37,99,235,0.2)",
-          }}>
-            🛡️
-          </div>
-          <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: G.gray800 }}>Criar conta</h1>
-          <p style={{ margin: "4px 0 0", color: G.gray400, fontSize: "14px" }}>Junte-se ao Stay Safe</p>
+    <PhoneFrame bgClass="bg-fundo">
+      <div className="flex flex-1 flex-col px-5 py-6">
+        <div className="mb-6 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[48px] items-center gap-2 rounded-[8px] border border-borda bg-superficie px-3.5 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+          >
+            <ArrowLeft size={20} weight="bold" aria-hidden="true" />
+            <span>Voltar</span>
+          </button>
+          <Logo size="sm" />
         </div>
 
-        {/* Fields */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginBottom: "20px" }}>
-          {field("Nome completo",
-            <input type="text" value={name} onChange={e => setName(e.target.value)}
-              placeholder="Maria da Silva" style={inputStyle} />
-          )}
+        <form onSubmit={handleRegister} className="rounded-[10px] border border-borda bg-superficie p-5">
+          <h1 className="mt-0 mb-1 font-display text-[24px] font-bold text-texto">
+            Criar conta
+          </h1>
+          <p className="mt-0 mb-5 text-[16px] text-texto-secundario">
+            Cadastre a conta principal da família.
+          </p>
 
-          {field("Email",
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="maria@email.com" style={inputStyle} />,
-            "Usado para notificações de alerta"
-          )}
+          <div className="mb-5 flex flex-col gap-4">
+            <div>
+              <label htmlFor="reg-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                Nome completo
+              </label>
+              <input
+                id="reg-name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Maria da Silva"
+                className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+              />
+            </div>
 
-          {field("Telefone / WhatsApp",
-            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-              placeholder="+55 11 99999-9999" style={inputStyle} />,
-            "Receberá ligação e SMS quando o alerta for acionado"
-          )}
+            <div>
+              <label htmlFor="reg-email" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                E-mail
+              </label>
+              <input
+                id="reg-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="maria@email.com"
+                className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+              />
+              <p className="mt-1 mb-0 text-[14px] text-texto-secundario">
+                Usado para receber avisos de emergência por e-mail.
+              </p>
+            </div>
 
-          {field("Senha",
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-              placeholder="Mínimo 6 caracteres" style={inputStyle} />
-          )}
+            <div>
+              <label htmlFor="reg-phone" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                Telefone de contato
+              </label>
+              <input
+                id="reg-phone"
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+55 11 99999-9999"
+                className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+              />
+            </div>
 
-          {field("Confirmar senha",
-            <>
-              <input type="password" value={confirm}
-                onChange={e => setConfirm(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleRegister()}
+            <div>
+              <label htmlFor="reg-password" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                Senha
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="reg-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Mínimo 6 caracteres"
+                  className="min-h-[56px] flex-1 rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="inline-flex min-h-[56px] shrink-0 items-center gap-1.5 rounded-[8px] border border-borda bg-fundo px-3 text-[15px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
+                >
+                  {showPassword ? (
+                    <>
+                      <EyeSlash size={20} weight="bold" aria-hidden="true" />
+                      <span>Ocultar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye size={20} weight="bold" aria-hidden="true" />
+                      <span>Mostrar</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="reg-confirm" className="mb-1.5 block text-[16px] font-semibold text-texto">
+                Confirmar senha
+              </label>
+              <input
+                id="reg-confirm"
+                type={showPassword ? "text" : "password"}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
                 placeholder="Repita a senha"
-                style={{
-                  ...inputStyle,
-                  borderColor: confirm && confirm !== password ? G.red : G.gray200,
-                }} />
+                className={`min-h-[56px] w-full rounded-[8px] border bg-fundo px-3.5 text-[18px] text-texto placeholder:text-texto-suave focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado ${
+                  confirm && confirm !== password ? "border-emergencia" : "border-borda"
+                }`}
+              />
               {confirm && confirm !== password && (
-                <p style={{ color: G.red, fontSize: "12px", margin: "4px 0 0" }}>As senhas não coincidem</p>
+                <p className="mt-1 mb-0 text-[15px] font-semibold text-emergencia">
+                  As senhas não coincidem.
+                </p>
               )}
-            </>
-          )}
-        </div>
-
-        {error && (
-          <div style={{
-            background: G.redLight, color: G.red,
-            padding: "10px 14px", borderRadius: "10px",
-            marginBottom: "16px", fontSize: "14px",
-          }}>
-            {error}
+            </div>
           </div>
-        )}
 
-        <Btn onClick={handleRegister} disabled={loading} color={G.blue}>
-          {loading ? "Criando conta..." : "Criar conta"}
-        </Btn>
+          {error && (
+            <div
+              role="alert"
+              className="mb-4 flex items-start gap-2.5 rounded-[8px] border border-emergencia bg-emergencia-suave p-3 text-[16px] font-semibold text-emergencia"
+            >
+              <WarningCircle size={20} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{error}</span>
+            </div>
+          )}
 
-        <button onClick={onBack} style={{
-          marginTop: "16px", background: "transparent", border: "none",
-          color: G.blue, fontSize: "14px", fontWeight: 500,
-          cursor: "pointer", padding: "8px",
-        }}>
-          ← Já tenho uma conta
-        </button>
+          <Btn type="submit" disabled={loading} variant="primario" size="normal">
+            <UserPlus size={20} weight="bold" aria-hidden="true" />
+            <span>{loading ? "Criando conta…" : "Criar conta"}</span>
+          </Btn>
+        </form>
       </div>
-    </div>
+    </PhoneFrame>
   );
 }
