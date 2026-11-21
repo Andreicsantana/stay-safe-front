@@ -1,8 +1,6 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Check,
-  Copy,
   DeviceMobile,
   HandHeart,
   PencilSimple,
@@ -18,6 +16,7 @@ import PhoneFrame from "../components/PhoneFrame";
 import Logo from "../components/Logo";
 import Btn from "../components/Btn";
 import ConfirmModal from "../components/ConfirmModal";
+import EditProfileModal from "../components/EditProfileModal";
 
 const WEB_DEVICE_TOKEN_KEY = "staysafe_device_token";
 
@@ -36,6 +35,7 @@ function getDeviceToken() {
 
 export default function ProfileSelectScreen({
   user,
+  accountToken,
   profiles: initialProfiles,
   onSelect,
   onCreateProfile,
@@ -47,25 +47,25 @@ export default function ProfileSelectScreen({
 
   const [editModal, setEditModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [editName, setEditName] = useState("");
-  const [editPin, setEditPin] = useState("");
-  const [editConfirmPin, setEditConfirmPin] = useState("");
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState("");
   const [confirmLogout, setConfirmLogout] = useState(false);
-  const [copiedId, setCopiedId] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   const handleSelect = async (profile) => {
     setLoadingId(profile.id);
     setError("");
     try {
-      const data = await api.post("/auth/select-profile", {
-        userId: user.id,
-        profileId: profile.id,
-        deviceToken: getDeviceToken(),
-        platform: "web",
-      });
+      const data = await api.post(
+        "/auth/select-profile",
+        {
+          userId: user.id,
+          profileId: profile.id,
+          deviceToken: getDeviceToken(),
+          platform: "web",
+        },
+        accountToken
+      );
       onSelect(profile, data);
     } catch (e) {
       setError(e.message);
@@ -74,26 +74,14 @@ export default function ProfileSelectScreen({
     }
   };
 
-  const openEdit = (profile) => {
-    setEditName(profile.name);
-    setEditPin("");
-    setEditConfirmPin("");
-    setModalError("");
-    setCopiedId(false);
-    setEditModal(profile);
-  };
-
-  const handleEdit = async () => {
-    if (!editName.trim()) return setModalError("O nome não pode ficar vazio.");
-    if (editPin && editPin !== editConfirmPin) return setModalError("Os PINs não coincidem.");
-
+  const handleEdit = async ({ name, pin }) => {
     setModalLoading(true);
     setModalError("");
     try {
-      const body = { userId: user.id, profileId: editModal.id, name: editName.trim() };
-      if (editPin) body.pin = editPin;
+      const body = { userId: user.id, profileId: editModal.id, name };
+      if (pin) body.pin = pin;
 
-      const data = await api.patch("/auth/update-profile", body);
+      const data = await api.patch("/auth/update-profile", body, accountToken);
       setProfiles((prev) =>
         prev.map((p) => (p.id === data.profile.id ? { ...p, ...data.profile } : p))
       );
@@ -110,10 +98,11 @@ export default function ProfileSelectScreen({
     setModalLoading(true);
     setError("");
     try {
-      await api.delete("/auth/delete-profile", {
-        userId: user.id,
-        profileId: deleteTarget.id,
-      });
+      await api.delete(
+        "/auth/delete-profile",
+        { userId: user.id, profileId: deleteTarget.id },
+        accountToken
+      );
       setProfiles((prev) => prev.filter((p) => p.id !== deleteTarget.id));
       setDeleteTarget(null);
     } catch (e) {
@@ -130,23 +119,16 @@ export default function ProfileSelectScreen({
     setModalLoading(true);
     setModalError("");
     try {
-      await api.post("/auth/force-logout", { userId: user.id, profileId: editModal.id });
+      await api.post(
+        "/auth/force-logout",
+        { userId: user.id, profileId: editModal.id },
+        accountToken
+      );
       setEditModal(null);
     } catch (e) {
       setModalError(e.message);
     } finally {
       setModalLoading(false);
-    }
-  };
-
-  const handleCopyId = async () => {
-    if (!editModal?.id) return;
-    try {
-      await navigator.clipboard.writeText(editModal.id);
-      setCopiedId(true);
-      setTimeout(() => setCopiedId(false), 2000);
-    } catch {
-      // clipboard unavailable
     }
   };
 
@@ -197,7 +179,10 @@ export default function ProfileSelectScreen({
         <div className="mt-3 flex gap-2 border-t border-borda pt-3">
           <button
             type="button"
-            onClick={() => openEdit(profile)}
+            onClick={() => {
+              setModalError("");
+              setEditModal(profile);
+            }}
             className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-borda bg-fundo px-3 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
           >
             <PencilSimple size={18} weight="bold" aria-hidden="true" />
@@ -297,130 +282,17 @@ export default function ProfileSelectScreen({
         </div>
       </div>
 
-      <Dialog.Root open={Boolean(editModal)} onOpenChange={(open) => { if (!open) setEditModal(null); }}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
-          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[90dvh] w-full max-w-[480px] overflow-y-auto rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 focus-visible:outline-none">
-            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
-            <Dialog.Title className="m-0 font-display text-[22px] font-bold text-texto">
-              Editar perfil
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 mb-4 text-[16px] text-texto-secundario">
-              Atualize os dados do perfil selecionado.
-            </Dialog.Description>
-
-            <div className="flex flex-col gap-4">
-              <div>
-                <label htmlFor="select-edit-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                  Nome do perfil
-                </label>
-                <input
-                  id="select-edit-name"
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                />
-              </div>
-
-              {editModal?.role === "dependent" && (
-                <>
-                  <div>
-                    <label htmlFor="select-edit-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                      Novo PIN (deixe vazio para não alterar)
-                    </label>
-                    <input
-                      id="select-edit-pin"
-                      type="password"
-                      inputMode="numeric"
-                      value={editPin}
-                      onChange={(e) => setEditPin(e.target.value)}
-                      placeholder="Novo PIN"
-                      className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                    />
-                  </div>
-
-                  {editPin && (
-                    <div>
-                      <label htmlFor="select-edit-confirm-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                        Confirmar PIN
-                      </label>
-                      <input
-                        id="select-edit-confirm-pin"
-                        type="password"
-                        inputMode="numeric"
-                        value={editConfirmPin}
-                        onChange={(e) => setEditConfirmPin(e.target.value)}
-                        placeholder="Repita o PIN"
-                        className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                      />
-                    </div>
-                  )}
-
-                  <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
-                    <p className="mt-0 mb-1 text-[14px] font-semibold text-texto-secundario">
-                      ID do perfil
-                    </p>
-                    <div className="flex items-center justify-between gap-2">
-                      <code className="break-all text-[14px] text-texto">{editModal.id}</code>
-                      <button
-                        type="button"
-                        onClick={handleCopyId}
-                        className="inline-flex min-h-[48px] shrink-0 items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[15px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                      >
-                        {copiedId ? (
-                          <>
-                            <Check size={18} weight="bold" className="text-cuidado" aria-hidden="true" />
-                            <span>Copiado</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={18} weight="bold" aria-hidden="true" />
-                            <span>Copiar</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-[8px] border border-emergencia/40 bg-emergencia-suave p-3.5">
-                    <p className="mt-0 mb-1 text-[16px] font-bold text-emergencia">
-                      Desconectar dispositivo
-                    </p>
-                    <p className="mt-0 mb-3 text-[15px] text-texto">
-                      Força a saída do dependente em todos os celulares conectados.
-                    </p>
-                    <Btn
-                      onClick={() => setConfirmLogout(true)}
-                      variant="perigo"
-                      size="normal"
-                      disabled={modalLoading}
-                    >
-                      <SignOut size={18} weight="bold" aria-hidden="true" />
-                      <span>Desconectar dependente</span>
-                    </Btn>
-                  </div>
-                </>
-              )}
-
-              {modalError && (
-                <p role="alert" className="m-0 text-[16px] font-semibold text-emergencia">
-                  {modalError}
-                </p>
-              )}
-
-              <div className="flex flex-col gap-2.5 pt-2">
-                <Btn onClick={handleEdit} variant="primario" size="normal" disabled={modalLoading}>
-                  {modalLoading ? "Salvando…" : "Salvar alterações"}
-                </Btn>
-                <Btn onClick={() => setEditModal(null)} variant="secundario" size="normal">
-                  Cancelar
-                </Btn>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {editModal && (
+        <EditProfileModal
+          key={editModal.id}
+          profile={editModal}
+          onClose={() => setEditModal(null)}
+          onSave={handleEdit}
+          onRequestForceLogout={() => setConfirmLogout(true)}
+          loading={modalLoading}
+          error={modalError}
+        />
+      )}
 
       <Dialog.Root open={showInstallGuide} onOpenChange={setShowInstallGuide}>
         <Dialog.Portal>

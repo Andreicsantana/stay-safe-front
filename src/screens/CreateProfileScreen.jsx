@@ -13,7 +13,7 @@ import PhoneFrame from "../components/PhoneFrame";
 import Logo from "../components/Logo";
 import Btn from "../components/Btn";
 
-export default function CreateProfileScreen({ user, onCreated, onLogout }) {
+export default function CreateProfileScreen({ user, accountToken, onCreated, onLogout }) {
   const [step, setStep] = useState("role");
   const [role, setRole] = useState(null);
   const [name, setName] = useState("");
@@ -41,7 +41,7 @@ export default function CreateProfileScreen({ user, onCreated, onLogout }) {
       const body = { userId: user.id, name: name.trim(), role };
       if (role === "dependent" && pin) body.pin = pin;
 
-      const data = await api.post("/auth/create-profile", body);
+      const data = await api.post("/auth/create-profile", body, accountToken);
       onCreated(data.profile);
     } catch (err) {
       setError(err.message);

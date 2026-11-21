@@ -1,12 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import * as Dialog from "@radix-ui/react-dialog";
 import {
   BellRinging,
   Check,
   CheckCircle,
   ClockCounterClockwise,
-  Copy,
   LinkBreak,
   MapPin,
   PencilSimple,
@@ -19,11 +17,13 @@ import {
   WifiSlash,
   X,
 } from "@phosphor-icons/react";
-import { api, WS_URL } from "../services/api";
+import { api } from "../services/api";
+import { useAlertSocket } from "../hooks/useAlertSocket";
 import PhoneFrame from "../components/PhoneFrame";
 import Btn from "../components/Btn";
 import StatusBadge from "../components/StatusBadge";
 import ConfirmModal from "../components/ConfirmModal";
+import EditProfileModal from "../components/EditProfileModal";
 import ConnectionBanner from "../components/ConnectionBanner";
 import { notifyCarerNewAlert } from "../utils/feedback";
 
@@ -72,19 +72,11 @@ export default function CarerScreen({
   const [confirmLogoutModal, setConfirmLogoutModal] = useState(false);
   const [actionError, setActionError] = useState("");
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [wsConnected, setWsConnected] = useState(false);
 
   const [editModal, setEditModal] = useState(null);
-  const [editName, setEditName] = useState("");
-  const [editPin, setEditPin] = useState("");
-  const [editConfirmPin, setEditConfirmPin] = useState("");
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState("");
-  const [copiedId, setCopiedId] = useState(false);
   const [confirmForceLogout, setConfirmForceLogout] = useState(false);
-
-  const wsRef = useRef(null);
 
   const loadDependents = useCallback(async () => {
     try {
@@ -121,93 +113,33 @@ export default function CarerScreen({
     return () => clearInterval(ticker);
   }, []);
 
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  useEffect(() => {
-    let ws = null;
-    let reconnectTimer = null;
-    let backoffMs = 1000;
-    let unmounted = false;
-
-    const connect = () => {
-      if (unmounted) return;
-      clearTimeout(reconnectTimer);
-      ws = new WebSocket(`${WS_URL}?token=${token}`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        backoffMs = 1000;
-        setWsConnected(true);
+  const handleSocketMessage = useCallback(
+    (msg) => {
+      if (msg.type === "ALERT_STATE") {
+        setActiveAlerts(msg.activeAlerts || []);
+      }
+      if (msg.type === "NEW_ALERT") {
+        setAlertBanners((prev) => [...prev, { ...msg, bannerId: `${Date.now()}-${Math.random()}` }]);
+        notifyCarerNewAlert();
         loadAlerts();
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.type === "ALERT_STATE") {
-            setActiveAlerts(msg.activeAlerts || []);
-          }
-          if (msg.type === "NEW_ALERT") {
-            setAlertBanners((prev) => [...prev, { ...msg, bannerId: `${Date.now()}-${Math.random()}` }]);
-            notifyCarerNewAlert();
-            loadAlerts();
-          }
-          if (["ALERT_RESOLVED", "ALERT_ESCALATED", "ALERT_ACKNOWLEDGED"].includes(msg.type)) {
-            loadAlerts();
-          }
-        } catch {
-          // ignore malformed ws message
-        }
-      };
-
-      ws.onclose = (event) => {
-        setWsConnected(false);
-        if (unmounted) return;
-        if (event.code === 4002 && onSessionExpired) {
-          onSessionExpired();
-          return;
-        }
-        reconnectTimer = setTimeout(connect, backoffMs);
-        backoffMs = Math.min(backoffMs * 2, 5000);
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-    };
-
-    const handleReconnectTrigger = () => {
-      if (document.visibilityState === "hidden") return;
-      if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-        backoffMs = 1000;
-        connect();
       }
-    };
-
-    connect();
-    window.addEventListener("online", handleReconnectTrigger);
-    document.addEventListener("visibilitychange", handleReconnectTrigger);
-
-    return () => {
-      unmounted = true;
-      clearTimeout(reconnectTimer);
-      window.removeEventListener("online", handleReconnectTrigger);
-      document.removeEventListener("visibilitychange", handleReconnectTrigger);
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
+      if (msg.type === "ALERT_UPDATED") {
+        setActiveAlerts((prev) => prev.map((a) => (a.id === msg.id ? { ...a, ...msg } : a)));
+        loadAlerts();
       }
-    };
-  }, [token, loadAlerts, onSessionExpired]);
+      if (["ALERT_RESOLVED", "ALERT_ESCALATED", "ALERT_ACKNOWLEDGED"].includes(msg.type)) {
+        loadAlerts();
+      }
+    },
+    [loadAlerts]
+  );
+
+  const { isConnected } = useAlertSocket({
+    token,
+    onOpen: loadAlerts,
+    onMessage: handleSocketMessage,
+    onSessionExpired,
+  });
 
   const acknowledge = async (alertId) => {
     setActionError("");
@@ -232,24 +164,12 @@ export default function CarerScreen({
     }
   };
 
-  const openEditDependent = (dependent) => {
-    setEditName(dependent.name);
-    setEditPin("");
-    setEditConfirmPin("");
-    setEditError("");
-    setCopiedId(false);
-    setEditModal(dependent);
-  };
-
-  const handleSaveDependent = async () => {
-    if (!editName.trim()) return setEditError("O nome não pode ficar vazio.");
-    if (editPin && editPin !== editConfirmPin) return setEditError("Os PINs não coincidem.");
-
+  const handleSaveDependent = async ({ name, pin }) => {
     setEditLoading(true);
     setEditError("");
     try {
-      const body = { name: editName.trim() };
-      if (editPin) body.pin = editPin;
+      const body = { name };
+      if (pin) body.pin = pin;
       const data = await api.patch(`/profiles/${editModal.id}`, body, token);
       setDependents((prev) =>
         prev.map((d) => (d.id === data.profile.id ? { ...d, ...data.profile } : d))
@@ -259,17 +179,6 @@ export default function CarerScreen({
       setEditError(e.message || "Erro ao salvar alterações.");
     } finally {
       setEditLoading(false);
-    }
-  };
-
-  const handleCopyId = async () => {
-    if (!editModal?.id) return;
-    try {
-      await navigator.clipboard.writeText(editModal.id);
-      setCopiedId(true);
-      setTimeout(() => setCopiedId(false), 2000);
-    } catch {
-      // clipboard unavailable
     }
   };
 
@@ -299,7 +208,7 @@ export default function CarerScreen({
 
   return (
     <PhoneFrame bgClass="bg-fundo">
-      <ConnectionBanner isConnected={isOnline && wsConnected} />
+      <ConnectionBanner isConnected={isConnected} />
 
       {alertBanners.length > 0 && (
         <button
@@ -337,12 +246,12 @@ export default function CarerScreen({
           </div>
           <div
             className={`inline-flex items-center gap-1.5 rounded-[8px] border px-2.5 py-1 text-[13px] font-semibold ${
-              isOnline && wsConnected
+              isConnected
                 ? "border-cuidado/30 bg-cuidado-suave text-cuidado"
                 : "border-atencao/30 bg-atencao-suave text-atencao"
             }`}
           >
-            {isOnline && wsConnected ? (
+            {isConnected ? (
               <>
                 <WifiHigh size={16} weight="bold" aria-hidden="true" />
                 <span>Ao vivo</span>
@@ -411,7 +320,9 @@ export default function CarerScreen({
                   const hasCoords = alert.latitude != null && alert.longitude != null;
                   const mapsUrl =
                     alert.mapsUrl ||
-                    (hasCoords ? `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}` : null);
+                    (hasCoords
+                      ? `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`
+                      : null);
 
                   return (
                     <article
@@ -422,7 +333,7 @@ export default function CarerScreen({
                         <div>
                           <h3 className="m-0 flex items-center gap-2 text-[20px] font-bold text-texto">
                             <UserCircle size={24} weight="bold" className="text-texto-secundario" aria-hidden="true" />
-                            <span>{alert.dependent_name || "Dependente"}</span>
+                            <span>{alert.dependentName || alert.dependent_name || "Dependente"}</span>
                           </h3>
                           <p className="mt-1 mb-0 text-[16px] font-medium text-texto-secundario">
                             Às {formatTime(alert.emitted_at)} ({formatElapsed(alert.emitted_at, nowMs)})
@@ -498,7 +409,7 @@ export default function CarerScreen({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="m-0 text-[18px] font-bold text-texto">
-                          {item.dependent_name || "Dependente"}
+                          {item.dependentName || item.dependent_name || "Dependente"}
                         </p>
                         <p className="mt-0.5 mb-0 text-[16px] text-texto-secundario">
                           {formatDate(item.emitted_at)} às {formatTime(item.emitted_at)}
@@ -551,7 +462,10 @@ export default function CarerScreen({
                     </div>
                     <button
                       type="button"
-                      onClick={() => openEditDependent(d)}
+                      onClick={() => {
+                        setEditError("");
+                        setEditModal({ ...d, role: d.role || "dependent" });
+                      }}
                       className="inline-flex min-h-[48px] items-center gap-1.5 rounded-[8px] border border-borda bg-fundo px-3.5 text-[16px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
                     >
                       <PencilSimple size={18} weight="bold" aria-hidden="true" />
@@ -602,126 +516,19 @@ export default function CarerScreen({
         </Tabs.List>
       </Tabs.Root>
 
-      <Dialog.Root open={Boolean(editModal)} onOpenChange={(open) => { if (!open) setEditModal(null); }}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-texto/50" />
-          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[90dvh] w-full max-w-[480px] overflow-y-auto rounded-t-[16px] border-t border-borda bg-superficie px-5 pt-4 pb-8 focus-visible:outline-none">
-            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-borda" aria-hidden="true" />
-            <Dialog.Title className="m-0 font-display text-[22px] font-bold text-texto">
-              Editar dependente
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 mb-4 text-[16px] text-texto-secundario">
-              Ajuste o nome, o PIN ou desconecte o aparelho do dependente.
-            </Dialog.Description>
-
-            <div className="flex flex-col gap-4">
-              <div>
-                <label htmlFor="edit-dep-name" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                  Nome do perfil
-                </label>
-                <input
-                  id="edit-dep-name"
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="edit-dep-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                  Novo PIN (deixe vazio para não alterar)
-                </label>
-                <input
-                  id="edit-dep-pin"
-                  type="password"
-                  inputMode="numeric"
-                  value={editPin}
-                  onChange={(e) => setEditPin(e.target.value)}
-                  placeholder="Novo PIN"
-                  className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                />
-              </div>
-
-              {editPin && (
-                <div>
-                  <label htmlFor="edit-dep-confirm-pin" className="mb-1.5 block text-[16px] font-semibold text-texto">
-                    Confirmar PIN
-                  </label>
-                  <input
-                    id="edit-dep-confirm-pin"
-                    type="password"
-                    inputMode="numeric"
-                    value={editConfirmPin}
-                    onChange={(e) => setEditConfirmPin(e.target.value)}
-                    placeholder="Repita o PIN"
-                    className="min-h-[56px] w-full rounded-[8px] border border-borda bg-fundo px-3.5 text-[18px] text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                  />
-                </div>
-              )}
-
-              <div className="rounded-[8px] border border-borda bg-fundo p-3.5">
-                <p className="mt-0 mb-1 text-[14px] font-semibold text-texto-secundario">
-                  ID do perfil
-                </p>
-                <div className="flex items-center justify-between gap-2">
-                  <code className="break-all text-[14px] text-texto">{editModal?.id}</code>
-                  <button
-                    type="button"
-                    onClick={handleCopyId}
-                    className="inline-flex min-h-[48px] shrink-0 items-center gap-1.5 rounded-[8px] border border-borda bg-superficie px-3 text-[15px] font-semibold text-texto focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-cuidado"
-                  >
-                    {copiedId ? (
-                      <>
-                        <Check size={18} weight="bold" className="text-cuidado" aria-hidden="true" />
-                        <span>Copiado</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy size={18} weight="bold" aria-hidden="true" />
-                        <span>Copiar</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-[8px] border border-emergencia/40 bg-emergencia-suave p-3.5">
-                <p className="mt-0 mb-1 text-[16px] font-bold text-emergencia">
-                  Desconectar aparelho
-                </p>
-                <p className="mt-0 mb-3 text-[15px] text-texto">
-                  Encerra a sessão deste dependente em todos os celulares conectados.
-                </p>
-                <Btn
-                  onClick={() => setConfirmForceLogout(true)}
-                  variant="perigo"
-                  size="normal"
-                  disabled={editLoading}
-                >
-                  <SignOut size={18} weight="bold" aria-hidden="true" />
-                  <span>Desconectar dependente</span>
-                </Btn>
-              </div>
-
-              {editError && (
-                <p role="alert" className="m-0 text-[16px] font-semibold text-emergencia">
-                  {editError}
-                </p>
-              )}
-
-              <div className="flex flex-col gap-2.5 pt-2">
-                <Btn onClick={handleSaveDependent} variant="primario" size="normal" disabled={editLoading}>
-                  {editLoading ? "Salvando…" : "Salvar alterações"}
-                </Btn>
-                <Btn onClick={() => setEditModal(null)} variant="secundario" size="normal">
-                  Cancelar
-                </Btn>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {editModal && (
+        <EditProfileModal
+          key={editModal.id}
+          profile={editModal}
+          onClose={() => setEditModal(null)}
+          onSave={handleSaveDependent}
+          onRequestForceLogout={() => setConfirmForceLogout(true)}
+          loading={editLoading}
+          error={editError}
+          title="Editar dependente"
+          description="Ajuste o nome, o PIN ou desconecte o aparelho do dependente."
+        />
+      )}
 
       <ConfirmModal
         isOpen={Boolean(confirmResolveId)}

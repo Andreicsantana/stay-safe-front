@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { storage } from "./services/storage";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
@@ -36,15 +36,42 @@ export default function App() {
     return { screen: "app", ...saved };
   });
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setAppState((prev) => {
+        if (prev.screen === "register") return { screen: "login", notice: "" };
+        if (prev.screen === "create_profile" && prev.profiles?.length > 0) {
+          return { ...prev, screen: "select_profile" };
+        }
+        return prev;
+      });
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   const handleLogin = (data) => {
     if (!data.profiles || data.profiles.length === 0) {
-      setAppState({ screen: "create_profile", user: data.user, profiles: [], notice: "" });
+      setAppState({
+        screen: "create_profile",
+        accountToken: data.accountToken,
+        user: data.user,
+        profiles: [],
+        notice: "",
+      });
     } else {
-      setAppState({ screen: "select_profile", user: data.user, profiles: data.profiles, notice: "" });
+      setAppState({
+        screen: "select_profile",
+        accountToken: data.accountToken,
+        user: data.user,
+        profiles: data.profiles,
+        notice: "",
+      });
     }
   };
 
   const handleGoToRegister = () => {
+    window.history.pushState({ screen: "register" }, "");
     setAppState({ screen: "register", notice: "" });
   };
 
@@ -62,6 +89,7 @@ export default function App() {
   };
 
   const handleGoToCreateProfile = () => {
+    window.history.pushState({ screen: "create_profile" }, "");
     setAppState((prev) => ({ ...prev, screen: "create_profile" }));
   };
 
@@ -69,6 +97,7 @@ export default function App() {
     const session = {
       token: authData.accessToken,
       refreshToken: authData.refreshToken,
+      accountToken: appState.accountToken || authData.accessToken,
       profile,
       user: appState.user,
       profiles: appState.profiles,
@@ -130,6 +159,7 @@ export default function App() {
     return (
       <CreateProfileScreen
         user={appState.user}
+        accountToken={appState.accountToken}
         onCreated={handleProfileCreated}
         onLogout={handleLogout}
       />
@@ -140,6 +170,7 @@ export default function App() {
     return (
       <ProfileSelectScreen
         user={appState.user}
+        accountToken={appState.accountToken}
         profiles={appState.profiles}
         onSelect={handleProfileSelected}
         onCreateProfile={handleGoToCreateProfile}

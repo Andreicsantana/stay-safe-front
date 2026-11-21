@@ -8,7 +8,8 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { api, WS_URL } from "../services/api";
+import { api } from "../services/api";
+import { useAlertSocket } from "../hooks/useAlertSocket";
 import PhoneFrame from "../components/PhoneFrame";
 import Btn from "../components/Btn";
 import PinPad from "../components/PinPad";
@@ -26,10 +27,7 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
   const [pinError, setPinError] = useState("");
   const [resolving, setResolving] = useState(false);
   const [timeLeft, setTimeLeft] = useState(null);
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [wsConnected, setWsConnected] = useState(false);
 
-  const wsRef = useRef(null);
   const timerRef = useRef(null);
   const countdownRef = useRef(null);
   const wakeLockRef = useRef(null);
@@ -40,12 +38,8 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
 
   const loadActiveAlert = useCallback(async () => {
     try {
-      const d = await api.get("/alerts/active", token);
-      if (d.activeAlerts?.length) {
-        setActiveAlert(d.activeAlerts[0]);
-      } else {
-        setActiveAlert(null);
-      }
+      const d = await api.get("/alerts/active-for-me", token);
+      setActiveAlert(d.alert || null);
     } catch (err) {
       if (err.status === 401 && onSessionExpired) {
         onSessionExpired();
@@ -60,101 +54,37 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
     return () => clearTimeout(timer);
   }, [loadActiveAlert]);
 
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  useEffect(() => {
-    let ws = null;
-    let reconnectTimer = null;
-    let backoffMs = 1000;
-    let unmounted = false;
-
-    const connect = () => {
-      if (unmounted) return;
-      clearTimeout(reconnectTimer);
-      ws = new WebSocket(`${WS_URL}?token=${token}`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        backoffMs = 1000;
-        setWsConnected(true);
-        loadActiveAlert();
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.type === "ALERT_STATE") {
-            setActiveAlert(msg.alert || null);
-          }
-          if (msg.type === "ALERT_ACKNOWLEDGED") {
-            setActiveAlert((a) => (a ? { ...a, status: "acknowledged" } : a));
-            notifyAlertAcknowledged();
-          }
-          if (msg.type === "ALERT_RESOLVED") {
-            setActiveAlert(null);
-            setShowResolveModal(false);
-            setPin("");
-            clearInterval(timerRef.current);
-          }
-          if (msg.type === "ALERT_ESCALATED") {
-            setActiveAlert((a) => (a ? { ...a, status: "escalated" } : a));
-          }
-          if (msg.type === "FORCE_LOGOUT") {
-            onLogout();
-          }
-        } catch {
-          // ignore malformed ws message
-        }
-      };
-
-      ws.onclose = (event) => {
-        setWsConnected(false);
-        if (unmounted) return;
-        if (event.code === 4002 && onSessionExpired) {
-          onSessionExpired();
-          return;
-        }
-        reconnectTimer = setTimeout(connect, backoffMs);
-        backoffMs = Math.min(backoffMs * 2, 5000);
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-    };
-
-    const handleReconnectTrigger = () => {
-      if (document.visibilityState === "hidden") return;
-      if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-        backoffMs = 1000;
-        connect();
+  const handleSocketMessage = useCallback(
+    (msg) => {
+      if (msg.type === "ALERT_STATE") {
+        setActiveAlert(msg.alert || null);
       }
-    };
-
-    connect();
-    window.addEventListener("online", handleReconnectTrigger);
-    document.addEventListener("visibilitychange", handleReconnectTrigger);
-
-    return () => {
-      unmounted = true;
-      clearTimeout(reconnectTimer);
-      window.removeEventListener("online", handleReconnectTrigger);
-      document.removeEventListener("visibilitychange", handleReconnectTrigger);
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
+      if (msg.type === "ALERT_ACKNOWLEDGED") {
+        setActiveAlert((a) => (a ? { ...a, status: "acknowledged" } : a));
+        notifyAlertAcknowledged();
       }
-    };
-  }, [token, onLogout, onSessionExpired, loadActiveAlert]);
+      if (msg.type === "ALERT_RESOLVED") {
+        setActiveAlert(null);
+        setShowResolveModal(false);
+        setPin("");
+        clearInterval(timerRef.current);
+      }
+      if (msg.type === "ALERT_ESCALATED") {
+        setActiveAlert((a) => (a ? { ...a, status: "escalated" } : a));
+      }
+      if (msg.type === "FORCE_LOGOUT") {
+        onLogout();
+      }
+    },
+    [onLogout]
+  );
+
+  const { isConnected } = useAlertSocket({
+    token,
+    onOpen: loadActiveAlert,
+    onMessage: handleSocketMessage,
+    onSessionExpired,
+  });
 
   useEffect(() => {
     if (
@@ -318,7 +248,7 @@ export default function DependentScreen({ session, onLogout, onSessionExpired })
 
   return (
     <PhoneFrame bgClass={activeBgClass}>
-      <ConnectionBanner isConnected={isOnline && wsConnected} />
+      <ConnectionBanner isConnected={isConnected} />
 
       {!hasActive ? (
         <div className="flex flex-1 flex-col justify-between px-5 pt-6 pb-6">
